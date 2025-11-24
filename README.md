@@ -46,25 +46,8 @@ Server saturation behavior
 
 The design architecture:
 
-┌───────────────────────────┐
-│        Test Runner        │
-│  - RPS scheduler          │
-│  - Worker manager         │
-└─────────────┬─────────────┘
-              │ goroutines
-┌─────────────▼─────────────┐
-│        Worker Pool        │
-│  - socket connect         │
-│  - send / receive         │
-│  - record metrics         │
-└─────────────┬─────────────┘
-              │ channels
-┌─────────────▼─────────────┐
-│    Metrics Aggregator     │
-│  - latency distribution   │
-│  - success/fail counters  │
-│  - QPS calculation        │
-└───────────────────────────┘
+|Test Runner| ---Go routines--> | Worker pool | --- channels --> |Metrics Aggregator |
+
 
 🧠 Key Concepts
 
@@ -203,4 +186,3 @@ MIT
 🤝 Contributions
 
 PRs welcome. Please open issues for enhancements or bugs.
-
