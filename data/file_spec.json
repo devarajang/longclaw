@@ -1,0 +1,1029 @@
+{
+  "spec_name": "1987_spec",
+  "field_definitions": [
+    {
+      "field_no": 1,
+      "field_name": "Secondary Bitmap",
+      "field_description": "Secondary bitmap",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 2,
+      "field_name": "Primary Account Number (PAN)",
+      "field_description": "The cardholder's primary account number.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 19
+    },
+    {
+      "field_no": 3,
+      "field_name": "Processing Code",
+      "field_description": "Describes the type of transaction (e.g., purchase, withdrawal, etc.).",
+      "field_type": "Fixed",
+      "min_length": 6,
+      "max_length": 6
+    },
+    {
+      "field_no": 4,
+      "field_name": "Amount, Transaction",
+      "field_description": "The amount of the transaction.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 5,
+      "field_name": "Amount, Settlement",
+      "field_description": "The settlement amount.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 6,
+      "field_name": "Amount, Cardholder Billing",
+      "field_description": "The billing amount for the cardholder.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 7,
+      "field_name": "Transmission Date and Time",
+      "field_description": "The date and time the message was transmitted.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 8,
+      "field_name": "Amount, Cardholder Billing Fee",
+      "field_description": "The fee associated with cardholder billing.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 9,
+      "field_name": "Conversion Rate, Settlement",
+      "field_description": "The conversion rate used for settlement.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 10,
+      "field_name": "Conversion Rate, Cardholder Billing",
+      "field_description": "The conversion rate used for cardholder billing.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 11,
+      "field_name": "Systems Trace Audit Number",
+      "field_description": "A unique number assigned by the system for tracking purposes.",
+      "field_type": "Fixed",
+      "min_length": 6,
+      "max_length": 6
+    },
+    {
+      "field_no": 12,
+      "field_name": "Time, Local Transaction",
+      "field_description": "The local time of the transaction.",
+      "field_type": "Fixed",
+      "min_length": 6,
+      "max_length": 6
+    },
+    {
+      "field_no": 13,
+      "field_name": "Date, Local Transaction",
+      "field_description": "The local date of the transaction.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 14,
+      "field_name": "Date, Expiration",
+      "field_description": "The expiration date of the card.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 15,
+      "field_name": "Date, Settlement",
+      "field_description": "The settlement date.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 16,
+      "field_name": "Date, Conversion",
+      "field_description": "The date of conversion.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 17,
+      "field_name": "Date, Capture",
+      "field_description": "The date the transaction was captured.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 18,
+      "field_name": "Merchant Type",
+      "field_description": "The type of merchant involved in the transaction.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 19,
+      "field_name": "Acquiring Institution Country Code",
+      "field_description": "The country code of the acquiring institution.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 20,
+      "field_name": "PAN Extended, Country Code",
+      "field_description": "The country code associated with the extended PAN.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 21,
+      "field_name": "Forwarding Institution Country Code",
+      "field_description": "The country code of the forwarding institution.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 22,
+      "field_name": "Point of Service Entry Mode",
+      "field_description": "Describes how the PAN was entered (e.g., manual, magnetic stripe, etc.).",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 23,
+      "field_name": "Application PAN Sequence Number",
+      "field_description": "The sequence number of the application PAN.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 24,
+      "field_name": "Network International Identifier (NII)",
+      "field_description": "Identifies the network for international transactions.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 25,
+      "field_name": "Point of Service Condition Code",
+      "field_description": "Indicates the condition under which the transaction occurred.",
+      "field_type": "Fixed",
+      "min_length": 2,
+      "max_length": 2
+    },
+    {
+      "field_no": 26,
+      "field_name": "Point of Service PIN Capture Code",
+      "field_description": "Indicates whether the PIN was captured.",
+      "field_type": "Fixed",
+      "min_length": 2,
+      "max_length": 2
+    },
+    {
+      "field_no": 27,
+      "field_name": "Authorization Identification Response Length",
+      "field_description": "The length of the authorization identification response.",
+      "field_type": "Fixed",
+      "min_length": 1,
+      "max_length": 1
+    },
+    {
+      "field_no": 28,
+      "field_name": "Amount, Transaction Fee",
+      "field_description": "The fee associated with the transaction.",
+      "field_type": "Fixed",
+      "min_length": 9,
+      "max_length": 9
+    },
+    {
+      "field_no": 29,
+      "field_name": "Amount, Settlement Fee",
+      "field_description": "The fee associated with settlement.",
+      "field_type": "Fixed",
+      "min_length": 9,
+      "max_length": 9
+    },
+    {
+      "field_no": 30,
+      "field_name": "Amount, Transaction Processing Fee",
+      "field_description": "The fee associated with transaction processing.",
+      "field_type": "Fixed",
+      "min_length": 9,
+      "max_length": 9
+    },
+    {
+      "field_no": 31,
+      "field_name": "Amount, Settlement Processing Fee",
+      "field_description": "The fee associated with settlement processing.",
+      "field_type": "Fixed",
+      "min_length": 9,
+      "max_length": 9
+    },
+    {
+      "field_no": 32,
+      "field_name": "Acquiring Institution Identification Code",
+      "field_description": "Identifies the acquiring institution.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 11
+    },
+    {
+      "field_no": 33,
+      "field_name": "Forwarding Institution Identification Code",
+      "field_description": "Identifies the forwarding institution.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 11
+    },
+    {
+      "field_no": 34,
+      "field_name": "Primary Account Number, Extended",
+      "field_description": "The extended version of the primary account number.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 28
+    },
+    {
+      "field_no": 35,
+      "field_name": "Track 2 Data",
+      "field_description": "Contains data from the magnetic stripe (Track 2).",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 37
+    },
+    {
+      "field_no": 36,
+      "field_name": "Track 3 Data",
+      "field_description": "Contains data from the magnetic stripe (Track 3).",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 104
+    },
+    {
+      "field_no": 37,
+      "field_name": "Retrieval Reference Number",
+      "field_description": "A unique number used for retrieval purposes.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 38,
+      "field_name": "Authorization Identification Response",
+      "field_description": "The response code from the authorization request.",
+      "field_type": "Fixed",
+      "min_length": 6,
+      "max_length": 6
+    },
+    {
+      "field_no": 39,
+      "field_name": "Response Code",
+      "field_description": "Indicates the outcome of the transaction (e.g., approved, declined, etc.).",
+      "field_type": "Fixed",
+      "min_length": 2,
+      "max_length": 2
+    },
+    {
+      "field_no": 40,
+      "field_name": "Service Restriction Code",
+      "field_description": "Indicates any restrictions on the service.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 41,
+      "field_name": "Card Acceptor Terminal Identification",
+      "field_description": "Identifies the terminal where the transaction occurred.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 42,
+      "field_name": "Card Acceptor Identification Code",
+      "field_description": "Identifies the card acceptor (e.g., merchant).",
+      "field_type": "Fixed",
+      "min_length": 15,
+      "max_length": 15
+    },
+    {
+      "field_no": 43,
+      "field_name": "Card Acceptor Name/Location",
+      "field_description": "The name and location of the card acceptor.",
+      "field_type": "Fixed",
+      "min_length": 40,
+      "max_length": 40
+    },
+    {
+      "field_no": 44,
+      "field_name": "Additional Response Data",
+      "field_description": "Additional data related to the response.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 25
+    },
+    {
+      "field_no": 45,
+      "field_name": "Track 1 Data",
+      "field_description": "Contains data from the magnetic stripe (Track 1).",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 76
+    },
+    {
+      "field_no": 46,
+      "field_name": "Additional Data - ISO",
+      "field_description": "Additional data as defined by ISO.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 47,
+      "field_name": "Additional Data - National",
+      "field_description": "Additional data as defined by national standards.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 48,
+      "field_name": "Additional Data - Private",
+      "field_description": "Additional data for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 49,
+      "field_name": "Currency Code, Transaction",
+      "field_description": "The currency code for the transaction.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 50,
+      "field_name": "Currency Code, Settlement",
+      "field_description": "The currency code for settlement.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 51,
+      "field_name": "Currency Code, Cardholder Billing",
+      "field_description": "The currency code for cardholder billing.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 52,
+      "field_name": "Personal Identification Number (PIN) Data",
+      "field_description": "Encrypted PIN data.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 53,
+      "field_name": "Security Related Control Information",
+      "field_description": "Information related to security controls.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 54,
+      "field_name": "Additional Amounts",
+      "field_description": "Additional amounts related to the transaction.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 120
+    },
+    {
+      "field_no": 55,
+      "field_name": "Integrated Circuit Card (ICC) System Related Data",
+      "field_description": "Data related to the ICC system.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 56,
+      "field_name": "Original Data Elements",
+      "field_description": "Original data elements for the transaction.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 57,
+      "field_name": "Authorization Life Cycle Code",
+      "field_description": "Indicates the life cycle of the authorization.",
+      "field_type": "LLLVar",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 58,
+      "field_name": "Authorizing Agent Institution Identification Code",
+      "field_description": "Identifies the authorizing agent institution.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 30
+    },
+    {
+      "field_no": 59,
+      "field_name": "Transport Data",
+      "field_description": "Data related to transport (e.g., airline, etc.).",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 60,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 61,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 62,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 63,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 64,
+      "field_name": "Message Authentication Code (MAC)",
+      "field_description": "Used for message authentication.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 65,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 66,
+      "field_name": "Settlement Code",
+      "field_description": "Indicates the type of settlement.",
+      "field_type": "Fixed",
+      "min_length": 1,
+      "max_length": 1
+    },
+    {
+      "field_no": 67,
+      "field_name": "Extended Payment Code",
+      "field_description": "Indicates extended payment options.",
+      "field_type": "Fixed",
+      "min_length": 2,
+      "max_length": 2
+    },
+    {
+      "field_no": 68,
+      "field_name": "Receiving Institution Country Code",
+      "field_description": "The country code of the receiving institution.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 69,
+      "field_name": "Settlement Institution Country Code",
+      "field_description": "The country code of the settlement institution.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 70,
+      "field_name": "Network Management Information Code",
+      "field_description": "Indicates network management information.",
+      "field_type": "Fixed",
+      "min_length": 3,
+      "max_length": 3
+    },
+    {
+      "field_no": 71,
+      "field_name": "Message Number",
+      "field_description": "A unique number assigned to the message.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 72,
+      "field_name": "Message Number, Last",
+      "field_description": "The last message number in a sequence.",
+      "field_type": "Fixed",
+      "min_length": 4,
+      "max_length": 4
+    },
+    {
+      "field_no": 73,
+      "field_name": "Date, Action",
+      "field_description": "The date on which an action is to be taken.",
+      "field_type": "Fixed",
+      "min_length": 6,
+      "max_length": 6
+    },
+    {
+      "field_no": 74,
+      "field_name": "Credits, Number",
+      "field_description": "The number of credits.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 75,
+      "field_name": "Credits, Reversal Number",
+      "field_description": "The number of credit reversals.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 76,
+      "field_name": "Debits, Number",
+      "field_description": "The number of debits.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 77,
+      "field_name": "Debits, Reversal Number",
+      "field_description": "The number of debit reversals.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 78,
+      "field_name": "Transfer, Number",
+      "field_description": "The number of transfers.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 79,
+      "field_name": "Transfer, Reversal Number",
+      "field_description": "The number of transfer reversals.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 80,
+      "field_name": "Inquiries, Number",
+      "field_description": "The number of inquiries.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 81,
+      "field_name": "Authorizations, Number",
+      "field_description": "The number of authorizations.",
+      "field_type": "Fixed",
+      "min_length": 10,
+      "max_length": 10
+    },
+    {
+      "field_no": 82,
+      "field_name": "Credits, Processing Fee Amount",
+      "field_description": "The processing fee amount for credits.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 83,
+      "field_name": "Credits, Transaction Fee Amount",
+      "field_description": "The transaction fee amount for credits.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 84,
+      "field_name": "Debits, Processing Fee Amount",
+      "field_description": "The processing fee amount for debits.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 85,
+      "field_name": "Debits, Transaction Fee Amount",
+      "field_description": "The transaction fee amount for debits.",
+      "field_type": "Fixed",
+      "min_length": 12,
+      "max_length": 12
+    },
+    {
+      "field_no": 86,
+      "field_name": "Credits, Amount",
+      "field_description": "The total amount of credits.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 87,
+      "field_name": "Credits, Reversal Amount",
+      "field_description": "The total amount of credit reversals.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 88,
+      "field_name": "Debits, Amount",
+      "field_description": "The total amount of debits.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 89,
+      "field_name": "Debits, Reversal Amount",
+      "field_description": "The total amount of debit reversals.",
+      "field_type": "Fixed",
+      "min_length": 16,
+      "max_length": 16
+    },
+    {
+      "field_no": 90,
+      "field_name": "Original Data Elements",
+      "field_description": "Original data elements for the transaction.",
+      "field_type": "Fixed",
+      "min_length": 42,
+      "max_length": 42
+    },
+    {
+      "field_no": 91,
+      "field_name": "File Update Code",
+      "field_description": "Indicates the type of file update.",
+      "field_type": "Fixed",
+      "min_length": 1,
+      "max_length": 1
+    },
+    {
+      "field_no": 92,
+      "field_name": "File Security Code",
+      "field_description": "Indicates the security level of the file.",
+      "field_type": "Fixed",
+      "min_length": 2,
+      "max_length": 2
+    },
+    {
+      "field_no": 93,
+      "field_name": "Response Indicator",
+      "field_description": "Indicates the type of response.",
+      "field_type": "Fixed",
+      "min_length": 5,
+      "max_length": 5
+    },
+    {
+      "field_no": 94,
+      "field_name": "Service Indicator",
+      "field_description": "Indicates the type of service.",
+      "field_type": "Fixed",
+      "min_length": 7,
+      "max_length": 7
+    },
+    {
+      "field_no": 95,
+      "field_name": "Replacement Amounts",
+      "field_description": "Indicates replacement amounts.",
+      "field_type": "Fixed",
+      "min_length": 42,
+      "max_length": 42
+    },
+    {
+      "field_no": 96,
+      "field_name": "Message Security Code",
+      "field_description": "Provides message security.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    },
+    {
+      "field_no": 97,
+      "field_name": "Amount, Net Settlement",
+      "field_description": "The net settlement amount.",
+      "field_type": "Fixed",
+      "min_length": 17,
+      "max_length": 17
+    },
+    {
+      "field_no": 98,
+      "field_name": "Payee",
+      "field_description": "Identifies the payee.",
+      "field_type": "Fixed",
+      "min_length": 25,
+      "max_length": 25
+    },
+    {
+      "field_no": 99,
+      "field_name": "Settlement Institution Identification Code",
+      "field_description": "Identifies the settlement institution.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 11
+    },
+    {
+      "field_no": 100,
+      "field_name": "Receiving Institution Identification Code",
+      "field_description": "Identifies the receiving institution.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 11
+    },
+    {
+      "field_no": 101,
+      "field_name": "File Name",
+      "field_description": "The name of the file.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 17
+    },
+    {
+      "field_no": 102,
+      "field_name": "Account Identification 1",
+      "field_description": "Identifies the account.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 28
+    },
+    {
+      "field_no": 103,
+      "field_name": "Account Identification 2",
+      "field_description": "Identifies the account.",
+      "field_type": "LLVar",
+      "min_length": 1,
+      "max_length": 28
+    },
+    {
+      "field_no": 104,
+      "field_name": "Transaction Description",
+      "field_description": "Describes the transaction.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 100
+    },
+    {
+      "field_no": 105,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 106,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 107,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 108,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 109,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 110,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 111,
+      "field_name": "Reserved for ISO Use",
+      "field_description": "Reserved for future ISO use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 112,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 113,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 114,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 115,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 116,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 117,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 118,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 119,
+      "field_name": "Reserved for National Use",
+      "field_description": "Reserved for national use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 120,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 121,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 122,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 123,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 124,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 125,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 126,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 127,
+      "field_name": "Reserved for Private Use",
+      "field_description": "Reserved for private use.",
+      "field_type": "LLLVar",
+      "min_length": 1,
+      "max_length": 999
+    },
+    {
+      "field_no": 128,
+      "field_name": "Message Authentication Code (MAC)",
+      "field_description": "Used for message authentication.",
+      "field_type": "Fixed",
+      "min_length": 8,
+      "max_length": 8
+    }
+  ]
+}

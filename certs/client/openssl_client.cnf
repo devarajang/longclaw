@@ -1,0 +1,20 @@
+[ req ]
+default_bits       = 2048
+prompt             = no
+default_md         = sha256
+distinguished_name = dn
+req_extensions     = req_ext
+
+[ dn ]
+C  = US
+ST = Florida
+L  = Coral Springs
+O  = ExampleOrg   # <-- ORG NAME WE WILL VALIDATE
+OU = DevDept
+CN = photon-client    # Common Name
+
+[ req_ext ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = photon-clientR

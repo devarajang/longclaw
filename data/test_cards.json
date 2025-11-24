@@ -1,0 +1,92 @@
+[
+  {
+    "card_number": "5555558265554449",
+    "cvv2": "449",
+    "track2_data": "5555558265554449=28011010000089000000",
+    "pin": "4449",
+    "expiry_date": "3105",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 1"
+  },
+  {
+    "card_number": "5105105105105100",
+    "cvv2": "890",
+    "track2_data": "5105105105105100=28011010000089000000",
+    "pin": "1222",
+    "expiry_date": "3205",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 2"
+  },
+  {
+    "card_number": "4012888888881881",
+    "cvv2": "881",
+    "track2_data": "4012888888881881=28011010000089000000",
+    "pin": "1881",
+    "expiry_date": "3305",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 3"
+  },
+  {
+    "card_number": "4242424242424242",
+    "cvv2": "242",
+    "track2_data": "4242424242424242=28011010000089000000",
+    "pin": "4242",
+    "expiry_date": "3405",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 4"
+  },
+  {
+    "card_number": "5200828282828210",
+    "cvv2": "210",
+    "track2_data": "5200828282828210=28011010000089000000",
+    "pin": "8210",
+    "expiry_date": "3505",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 5"
+  },
+  {
+    "card_number": "5062210000000009",
+    "cvv2": "890",
+    "track2_data": "4012888888881881=28011010000089000000",
+    "pin": "1222",
+    "expiry_date": "3605",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 6"
+  },
+  {
+    "card_number": "4942424242424242",
+    "cvv2": "242",
+    "track2_data": "4942424242424242=28011010000089000000",
+    "pin": "4242",
+    "expiry_date": "3705",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 7"
+  },
+  {
+    "card_number": "5555555555554444",
+    "cvv2": "444",
+    "track2_data": "4012888888881881=28011010000089000000",
+    "pin": "4444",
+    "expiry_date": "3805",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 8"
+  },
+  {
+    "card_number": "4000056655665556",
+    "cvv2": "556",
+    "track2_data": "4012888888881881=28011010000089000000",
+    "pin": "5556",
+    "expiry_date": "3905",
+    "address_line1": null,
+    "zip_code": null,
+    "test_data_name": "Test Card 9"
+  }
+]

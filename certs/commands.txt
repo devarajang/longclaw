@@ -1,0 +1,45 @@
+# 1) Create CA private key and self-signed CA cert
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -out ca.crt -subj "/C=US/ST=Florida/L=Coral Springs/O=ExampleOrg/OU=CA/CN=Example-CA"
+
+# 2) Create server key and CSR (using the config to include SAN)
+openssl genrsa -out server.key 2048
+openssl req -new -key server.key -out server.csr -config openssl_server.cnf
+
+# 3) Sign the server CSR with our CA (use the SAN extension from the config)
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -sha256 -extfile openssl_server.cnf -extensions req_ext
+
+
+# How to test from openssl
+
+openssl s_client -connect localhost:8443 -CAfile ca.crt
+
+
+# Create client private key
+openssl genrsa -out client.key 2048
+
+# Create CSR using the config (with Org = PhotonCompTech)
+openssl req -new -key client.key -out client.csr -config openssl_client.cnf
+
+# Sign CSR with CA to generate client certificate
+openssl x509 -req -in client.csr \
+  -CA ../server/ca.crt -CAkey ../server/ca.key -CAcreateserial \
+  -out client.crt -days 365 -sha256 \
+  -extfile openssl_client.cnf -extensions req_ext
+
+
+# Create PFX for the client key , cert and using ca cert
+
+openssl pkcs12 -export \
+  -out client.pfx \
+  -inkey client.key \
+  -in client.crt \
+  -certfile ../server/ca.crt
+
+
+# select  from request_response_log
+
+# select * from stress_test
+
+#SELECT  reference , ROUND((JULIANDAY(response_time) - JULIANDAY(request_time)) * 86400) AS difference_in_seconds
+#,JULIANDAY(request_time) ,JULIANDAY(response_time) FROM request_response_log order by request_time  desc limit 9;
