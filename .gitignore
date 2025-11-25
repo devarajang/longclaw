@@ -31,3 +31,4 @@ go.work.sum
 # .idea/
 # .vscode/
 .DS_Store
+data/stress_test.db*
