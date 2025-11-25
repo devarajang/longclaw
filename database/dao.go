@@ -19,6 +19,7 @@ type StressTest struct {
 type RequestLog struct {
 	ID           int       `json:"id"`
 	Reference    string    `json:"reference"`
+	ConnectionID string    `json:"connection_id"`
 	RequestTime  time.Time `json:"request_time"`
 	ResponseTime time.Time `json:"response_time"`
 	TimeTaken    int       `json:"time_taken"` // in milliseconds
@@ -50,24 +51,38 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 	}, nil
 }
 
-func (s *StressTestDB) UpdateResponseTime(reference string) error {
-	_, err := s.db.Exec(
-		"UPDATE request_response_log set response_time = ? where reference = ?",
-		time.Now(), reference,
+func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string) error {
+	// First, get the request_time
+	var requestTime time.Time
+	err := s.db.QueryRow(
+		"SELECT request_time FROM request_response_log WHERE reference = ? AND connection_id = ?",
+		reference, connectionID,
+	).Scan(&requestTime)
+	if err != nil {
+		return fmt.Errorf("failed to get request time: %v", err)
+	}
+
+	// Calculate time taken in nanoseconds
+	responseTime := time.Now()
+	timeTaken := responseTime.Sub(requestTime).Milliseconds()
+
+	// Update with calculated value
+	_, err = s.db.Exec(
+		"UPDATE request_response_log SET response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
+		responseTime, timeTaken, reference, connectionID,
 	)
 	if err != nil {
-		fmt.Println(err.Error())
+		return fmt.Errorf("failed to update response log: %v", err)
 	}
 
 	return err
 }
 
 // Add a request-response log entry
-func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime, responseTime time.Time, timeTaken int, reference string) error {
+func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionId string) error {
 	_, err := s.db.Exec(
-		"INSERT INTO request_response_log (stresstest_id, request_time, response_time, time_taken, reference) VALUES (?, ?, ?, ?, ?)",
-		stressTestID, requestTime, responseTime, timeTaken, reference,
-	)
+		"INSERT INTO request_response_log (stresstest_id, request_time, reference,connection_id) VALUES (?, ?, ?, ?)",
+		stressTestID, requestTime, reference, connectionId)
 	//fmt.Println(err.Error())
 	return err
 }

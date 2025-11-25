@@ -51,6 +51,7 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			stresstest_id INTEGER NOT NULL,
 			reference TEXT NOT NULL,
+			connection_id TEXT NOT NULL,
 			FOREIGN KEY (stresstest_id) REFERENCES stress_test (id)
 		)
 	`)

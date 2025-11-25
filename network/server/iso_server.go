@@ -43,7 +43,7 @@ func (c *IsoConnection) HandleRead() {
 		// buf := make([]byte, 4096)
 		// n, err := c.conn.Read(buf)
 		// Usage
-		log.Println("Reading length-prefixed message from", c.conn.RemoteAddr())
+		//log.Println("Reading length-prefixed message from", c.conn.RemoteAddr())
 		message, err := readLengthPrefixedMessage(c.conn)
 		if err != nil {
 			log.Printf("Error: %v", err)
@@ -57,13 +57,13 @@ func (c *IsoConnection) HandleRead() {
 			responseTime: time.Now(),
 			rawRequest:   message[0:n],
 		}
-		log.Println("Reading data from ", c.conn.RemoteAddr())
-		log.Println("Read data:", string(req.rawRequest))
+		//log.Println("Reading data from ", c.conn.RemoteAddr())
+		//log.Println("Read data:", string(req.rawRequest))
 
 		isoMessage, err := iso.NewIso8583Message(string(message[0:n]), utils.GlobalIsoSpec)
 		req.reference = isoMessage.GetField(36)
 
-		c.db.UpdateResponseTime(req.reference)
+		c.db.UpdateResponseTime(req.reference, c.conn.RemoteAddr().String())
 	}
 }
 func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
@@ -103,8 +103,9 @@ func (c *IsoConnection) HandleChannelEvents() {
 
 			_, err := c.conn.Write(buf)
 			// Write to  database once the write to socket is done
-			var t time.Time
-			err = c.db.AddRequestLog(msg.stressTestId, time.Now(), t, -1, msg.reference)
+			//var t time.Time
+			err = c.db.AddRequestLog(msg.stressTestId, time.Now(),
+				msg.reference, c.conn.RemoteAddr().String())
 			if err != nil {
 				log.Println("DB Write error:", err)
 				return
