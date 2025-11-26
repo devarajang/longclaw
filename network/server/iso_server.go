@@ -194,6 +194,9 @@ func sendSingleMessage(conn *IsoConnection, stressTest database.StressTest, isoS
 	if isoMessage.GetField(1) != "" {
 		isoMessage.SetField(1, card.CardNumber)
 	}
+	if isoMessage.GetField(13) != "" {
+		isoMessage.SetField(13, card.ExpiryDate)
+	}
 	if isoMessage.GetField(34) != "" {
 		isoMessage.SetField(34, card.Track2Data)
 	}
