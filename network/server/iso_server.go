@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/devarajang/longclaw/database"
@@ -178,7 +179,7 @@ func (server *IsoServer) RunStress(stressTest database.StressTest, isoSpec *iso.
 
 func sendSingleMessage(conn *IsoConnection, stressTest database.StressTest, isoSpec *iso.IsoSpec) {
 	reference := utils.GenerateTimestampID()
-	isoMessage, err := iso.NewIso8583Message(utils.RandomTemplate(), isoSpec)
+	isoMessage, err := iso.NewIso8583Message(utils.RandomTemplate().Message, isoSpec)
 	if err != nil {
 		fmt.Println("ISO Error:", err)
 		return
@@ -199,6 +200,30 @@ func sendSingleMessage(conn *IsoConnection, stressTest database.StressTest, isoS
 	}
 	if isoMessage.GetField(34) != "" {
 		isoMessage.SetField(34, card.Track2Data)
+	}
+	if isoMessage.GetField(122) != "" {
+		de123 := isoMessage.GetField(122)
+		ind := strings.Index(de123, "CV")
+
+		if ind > -1 {
+			//de123[ind+2 : 2]
+			lenStr := utils.Substr(de123, ind+2, 2)
+			sb := strings.Builder{}
+			sb.WriteString(utils.Substr(de123, 0, ind))
+
+			switch lenStr {
+			case "05":
+				sb.WriteString("CV051 ")
+				sb.WriteString(card.CVV2)
+			case "07":
+				sb.WriteString("CV0711 ")
+				sb.WriteString(card.CVV2)
+				sb.WriteString("M")
+			}
+			fmt.Println(de123)
+			fmt.Println(sb.String())
+			isoMessage.SetField(122, sb.String())
+		}
 	}
 
 	isoMessage.SetField(36, reference)

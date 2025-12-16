@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 
 	"github.com/devarajang/longclaw/database"
+	"github.com/devarajang/longclaw/handlers"
+
 	"github.com/devarajang/longclaw/iso"
 	network "github.com/devarajang/longclaw/network/server"
 	"github.com/devarajang/longclaw/runner"
@@ -15,18 +15,28 @@ import (
 
 func main() {
 
+	//	de123 := "030TDAV132218200002140CV0711 322M" // "011TDCV051 613"
+
 	basePath := "/Users/deva/workspace/goworkspace/longclaw/"
 	dataPath := basePath + "data/"
 	certPath := basePath + "certs/server/"
+
+	/*var App = */
 
 	// Initialize database
 	db, err := database.NewStressTestDB(dataPath + "stress_test.db")
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
+		return
 	}
 	defer db.Close()
 
-	utils.LoadTemplates(dataPath)
+	err = utils.LoadTemplates(dataPath)
+
+	if err != nil {
+		log.Fatal("Failed to initialize message templates:", err)
+		return
+	}
 
 	isoSpec, err := iso.LoadSpecs(dataPath)
 	utils.GlobalIsoSpec = isoSpec
@@ -53,16 +63,16 @@ func main() {
 			return
 		}
 	*/
-	server, err := network.NewIsoServer(db, certPath)
+	isoServer, err := network.NewIsoServer(db, certPath)
 	if err == nil {
 		panic("Unable to create server")
 	}
-	go server.StartListen()
+	go isoServer.StartListen()
 
 	str := &runner.StressTestRunner{
 		StressChannel: make(chan database.StressTest),
 		IsoSpec:       isoSpec,
-		Server:        server,
+		Server:        isoServer,
 	}
 
 	go str.HandleChannelEvents()
@@ -72,36 +82,17 @@ func main() {
 		utils.LoadCards(dataPath)
 	}()
 
-	mux := startHttpHandler(server, db, str)
-
-	http.ListenAndServe(":8080", mux)
+	var app *handlers.App = &handlers.App{
+		Config: &handlers.AppConfig{
+			BasePath: basePath,
+			DataPath: dataPath,
+			CertPath: certPath,
+		},
+		DB:           db,
+		IsoServer:    isoServer,
+		StressRunner: str,
+	}
+	server := handlers.New("1.0", app)
+	server.StartServer(":8080")
 	//server.StartStress(5)
-}
-
-func startHttpHandler(server *network.IsoServer, db *database.StressTestDB, str *runner.StressTestRunner) *http.ServeMux {
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /clients", func(w http.ResponseWriter, r *http.Request) {
-		clients := server.GetConnectedClients()
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(clients)
-	})
-
-	mux.HandleFunc("POST /stress_tests", func(w http.ResponseWriter, r *http.Request) {
-		// Create a new stress test (from handler)
-		var stressTestReq = database.StressTest{}
-		if err := json.NewDecoder(r.Body).Decode(&stressTestReq); err != nil {
-			http.Error(w, `{"error": "Invalid JSON"}`, http.StatusBadRequest)
-			return
-		}
-		stressTest, err := db.CreateStressTest(stressTestReq.Name, stressTestReq.TestTimeSecs, stressTestReq.RequestPerSecond)
-		if err != nil {
-			log.Fatal("Failed to create stress test:", err)
-		}
-		str.StressChannel <- *stressTest
-		log.Printf("Created stress test: %+v\n", stressTest)
-		json.NewEncoder(w).Encode(stressTest)
-	})
-	return mux
 }

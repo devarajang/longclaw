@@ -1,32 +1,44 @@
 package utils
 
 import (
-	"bufio"
+	"encoding/json"
 	"math/rand"
 	"os"
 )
 
-var messageList []string
+type IsoMsgTemplate struct {
+	Message         string `json:"message"`
+	OriginalMessage string `jaon:"original_message"`
+}
 
-func LoadTemplates(templatePath string) {
+var messageList []IsoMsgTemplate
 
-	messageList = make([]string, 0)
-	file, err := os.Open(templatePath + "template_messages.txt")
+func LoadTemplates(templatePath string) error {
+
+	messageList = make([]IsoMsgTemplate, 0)
+	file, err := os.Open(templatePath + "template_messages.json")
 
 	if err != nil {
 		panic(err.Error())
 	}
 	defer file.Close() // Ensure the file is closed
-	scanner := bufio.NewScanner(file)
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&messageList)
+
+	if err != nil {
+		return err
+	}
+	return nil
+	/*scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
 
 		messageList = append(messageList, scanner.Text())
-	}
+		}*/
 	//fmt.Println(messageList)
 }
 
-func RandomTemplate() string {
+func RandomTemplate() IsoMsgTemplate {
 	randNum := rand.Intn(len(messageList))
 	return messageList[randNum]
 }
