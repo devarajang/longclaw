@@ -7,6 +7,7 @@ import (
 	"math/big"
 	mathrand "math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/devarajang/longclaw/dtos"
@@ -18,11 +19,17 @@ var GlobalIsoSpec *iso.IsoSpec
 var CardsList []dtos.Card
 
 func LoadCards(dataPath string) error {
+	// Support both file path and directory path for backward compatibility
+	filePath := dataPath
+	if !strings.HasSuffix(dataPath, ".json") {
+		filePath = dataPath + "test_cards.json"
+	}
 
-	file, err := os.Open(dataPath + "test_cards.json")
+	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 
 	decoder := json.NewDecoder(file)
 	decoder.Decode(&CardsList)

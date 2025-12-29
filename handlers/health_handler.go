@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/devarajang/longclaw/database"
@@ -39,7 +40,9 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) StartServer(addr string) {
 	h.routes()
+	log.Println("Starting HTTP server", addr)
 	http.ListenAndServe(addr, h.Mux)
+
 }
 
 func (h *Handlers) routes() {

@@ -16,11 +16,10 @@ import (
 	"time"
 
 	"github.com/devarajang/longclaw/database"
+	"github.com/devarajang/longclaw/internal/config"
 	"github.com/devarajang/longclaw/iso"
 	"github.com/devarajang/longclaw/utils"
 )
-
-const ExpectedClientCN = "photon-client" // <--- Validate this
 
 type IsoRequestResponse struct {
 	requestTime  time.Time
@@ -168,12 +167,12 @@ func (c *IsoConnection) HandleChannelEvents() {
 
 type IsoServer struct {
 	listener net.Listener
-	certPath string
+	config   *config.Config
 	connMap  map[string]*IsoConnection
 	db       *database.StressTestDB
 }
 
-func validateClient(connState tls.ConnectionState) error {
+func validateClient(connState tls.ConnectionState, expectedCN string) error {
 
 	if len(connState.PeerCertificates) == 0 {
 		return fmt.Errorf("no client certificate presented")
@@ -182,7 +181,7 @@ func validateClient(connState tls.ConnectionState) error {
 	clientCert := connState.PeerCertificates[0]
 
 	// Check Org fields
-	if clientCert.Subject.CommonName != ExpectedClientCN {
+	if clientCert.Subject.CommonName != expectedCN {
 
 		return fmt.Errorf("invalid client Common name: %v",
 			clientCert.Subject.CommonName)
@@ -358,7 +357,7 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	}
 
 	// Validate client certificate Org
-	if err := validateClient(tlsConn.ConnectionState()); err != nil {
+	if err := validateClient(tlsConn.ConnectionState(), server.config.TLS.ExpectedCN); err != nil {
 		log.Println("client cert validation failed:", err)
 		return
 	}
@@ -379,13 +378,13 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 func (server *IsoServer) StartListen() error {
 
 	// First create cert from certfile and keyfile
-	cert, err := tls.LoadX509KeyPair(server.certPath+"server.crt", server.certPath+"server.key")
+	cert, err := tls.LoadX509KeyPair(server.config.TLS.ServerCertPath, server.config.TLS.ServerKeyPath)
 	if err != nil {
 		log.Fatalf("failed to load server cert/key: %v", err)
 		return err
 	}
 
-	caCert, err := os.ReadFile(server.certPath + "ca.crt")
+	caCert, err := os.ReadFile(server.config.TLS.CAPath)
 
 	if err != nil {
 		log.Fatalf("failed to load ca cert: %v", err)
@@ -419,12 +418,12 @@ func (server *IsoServer) StartListen() error {
 	}
 }
 
-func NewIsoServer(db *database.StressTestDB, certPath string) (*IsoServer, error) {
+func NewIsoServer(db *database.StressTestDB, cfg *config.Config) (*IsoServer, error) {
 
 	server := IsoServer{
-		certPath: certPath,
-		connMap:  make(map[string]*IsoConnection),
-		db:       db,
+		config:  cfg,
+		connMap: make(map[string]*IsoConnection),
+		db:      db,
 	}
 
 	return &server, errors.New("Unable to create the server")

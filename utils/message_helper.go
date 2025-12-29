@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"os"
+	"strings"
 )
 
 type IsoMsgTemplate struct {
@@ -14,29 +15,25 @@ type IsoMsgTemplate struct {
 var messageList []IsoMsgTemplate
 
 func LoadTemplates(templatePath string) error {
-
 	messageList = make([]IsoMsgTemplate, 0)
-	file, err := os.Open(templatePath + "template_messages.json")
 
+	// Support both file path and directory path for backward compatibility
+	filePath := templatePath
+	if !strings.HasSuffix(templatePath, ".json") {
+		filePath = templatePath + "template_messages.json"
+	}
+
+	file, err := os.Open(filePath)
 	if err != nil {
-		//panic(err.Error())
 		return err
 	}
-	defer file.Close() // Ensure the file is closed
+	defer file.Close()
 	decoder := json.NewDecoder(file)
 	err = decoder.Decode(&messageList)
-
 	if err != nil {
 		return err
 	}
 	return nil
-	/*scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-
-		messageList = append(messageList, scanner.Text())
-		}*/
-	//fmt.Println(messageList)
 }
 
 func RandomTemplate() IsoMsgTemplate {
