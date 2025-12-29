@@ -34,3 +34,5 @@ go.work.sum
 data/stress_test.db*
 .zed/settings.json
 .zed/debug.json
+longclaw
+__debug_bin*
