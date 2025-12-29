@@ -27,6 +27,16 @@ type RequestLog struct {
 	StressTestID int       `json:"stresstest_id"`
 }
 
+type ScheduledMessage struct {
+	ID           int       `json:"id"`
+	Reference    string    `json:"reference"`
+	Message      string    `json:"message"`
+	CreatedAt    time.Time `json:"created_at"`
+	ConnectionID string    `json:"connection_id"`
+	StressTestID int       `json:"stresstest_id"`
+	SentAt       time.Time `json:"sent_at"`
+}
+
 // Create a new stress test
 func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int) (*StressTest, error) {
 	result, err := s.db.Exec(
@@ -78,11 +88,18 @@ func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string)
 	return err
 }
 
+// Add scheduled message to table
+func (s *StressTestDB) AddScheduledMessage(stressTestID int, createdAt time.Time, reference string, connectionID string, message string) error {
+	_, err := s.db.Exec("INSERT INTO scheduled_message(stresstest_id, created_at, reference, connection_id, message) VALUES (?,?,?,?,?)",
+		stressTestID, createdAt, reference, connectionID, message)
+	return err
+}
+
 // Add a request-response log entry
-func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionId string) error {
+func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionID string) error {
 	_, err := s.db.Exec(
 		"INSERT INTO request_response_log (stresstest_id, request_time, reference,connection_id) VALUES (?, ?, ?, ?)",
-		stressTestID, requestTime, reference, connectionId)
+		stressTestID, requestTime, reference, connectionID)
 	//fmt.Println(err.Error())
 	return err
 }

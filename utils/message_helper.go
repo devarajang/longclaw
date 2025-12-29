@@ -19,7 +19,8 @@ func LoadTemplates(templatePath string) error {
 	file, err := os.Open(templatePath + "template_messages.json")
 
 	if err != nil {
-		panic(err.Error())
+		//panic(err.Error())
+		return err
 	}
 	defer file.Close() // Ensure the file is closed
 	decoder := json.NewDecoder(file)

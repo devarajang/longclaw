@@ -59,6 +59,23 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 		return nil, err
 	}
 
+	// Create scheduled_message table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS scheduled_message (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			reference TEXT NOT NULL,
+			message TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			connection_id TEXT NOT NULL,
+			stresstest_id INTEGER NOT NULL,
+			created_at DATETIME DEFAULT NULL,
+			FOREIGN KEY (stresstest_id) REFERENCES stress_test (id)
+		)
+	`)
+	if err != nil {
+		return nil, err
+	}
+
 	return &StressTestDB{db: db}, nil
 }
 

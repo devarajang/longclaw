@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/devarajang/longclaw/database"
@@ -63,6 +62,7 @@ func main() {
 			return
 		}
 	*/
+	log.Println("Starting New ISO Server")
 	isoServer, err := network.NewIsoServer(db, certPath)
 	if err == nil {
 		panic("Unable to create server")
@@ -78,7 +78,7 @@ func main() {
 	go str.HandleChannelEvents()
 
 	go func() {
-		fmt.Println("Loading test cards")
+		log.Println("Loading test cards")
 		utils.LoadCards(dataPath)
 	}()
 

@@ -32,3 +32,5 @@ go.work.sum
 # .vscode/
 .DS_Store
 data/stress_test.db*
+.zed/settings.json
+.zed/debug.json
