@@ -5,6 +5,7 @@ import (
 
 	"github.com/devarajang/longclaw/database"
 	"github.com/devarajang/longclaw/handlers"
+	"github.com/devarajang/longclaw/internal/config"
 
 	"github.com/devarajang/longclaw/iso"
 	network "github.com/devarajang/longclaw/network/server"
@@ -14,30 +15,26 @@ import (
 
 func main() {
 
-	//	de123 := "030TDAV132218200002140CV0711 322M" // "011TDCV051 613"
-
 	basePath := "/Users/deva/workspace/goworkspace/longclaw/"
-	dataPath := basePath + "data/"
-	certPath := basePath + "certs/server/"
 
-	/*var App = */
+	cfg, err := config.Load(basePath)
 
 	// Initialize database
-	db, err := database.NewStressTestDB(dataPath + "stress_test.db")
+	db, err := database.NewStressTestDB(cfg.Database.Path)
 	if err != nil {
 		log.Fatal("Failed to initialize database:", err)
 		return
 	}
 	defer db.Close()
 
-	err = utils.LoadTemplates(dataPath)
+	err = utils.LoadTemplates(cfg.Data.TemplatesPath)
 
 	if err != nil {
 		log.Fatal("Failed to initialize message templates:", err)
 		return
 	}
 
-	isoSpec, err := iso.LoadSpecs(dataPath)
+	isoSpec, err := iso.LoadSpecsFromFile(cfg.Data.SpecPath)
 	utils.GlobalIsoSpec = isoSpec
 
 	if err != nil {
@@ -63,7 +60,7 @@ func main() {
 		}
 	*/
 	log.Println("Starting New ISO Server")
-	isoServer, err := network.NewIsoServer(db, certPath)
+	isoServer, err := network.NewIsoServer(db, cfg)
 	if err == nil {
 		panic("Unable to create server")
 	}
@@ -79,20 +76,20 @@ func main() {
 
 	go func() {
 		log.Println("Loading test cards")
-		utils.LoadCards(dataPath)
+		utils.LoadCards(cfg.Data.CardsPath)
 	}()
 
 	var app *handlers.App = &handlers.App{
 		Config: &handlers.AppConfig{
 			BasePath: basePath,
-			DataPath: dataPath,
-			CertPath: certPath,
+			DataPath: cfg.Data.Path,
+			CertPath: cfg.TLS.ServerCertPath,
 		},
 		DB:           db,
 		IsoServer:    isoServer,
 		StressRunner: str,
 	}
 	server := handlers.New("1.0", app)
-	server.StartServer(":8080")
+	server.StartServer(cfg.Server.HTTPPort)
 	//server.StartStress(5)
 }

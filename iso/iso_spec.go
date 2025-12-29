@@ -22,8 +22,8 @@ type IsoSpec struct {
 	FieldDefMap map[int]FieldDef
 }
 
-func LoadSpecs(filePath string) (*IsoSpec, error) {
-	file, err := os.Open(filePath + "file_spec.json")
+func LoadSpecsFromFile(filePath string) (*IsoSpec, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, errors.New("Unable to load spec")
 	}
@@ -39,5 +39,4 @@ func LoadSpecs(filePath string) (*IsoSpec, error) {
 		isoSpec.FieldDefMap[fieldDef.FieldNo] = fieldDef
 	}
 	return &isoSpec, nil
-
 }
