@@ -3,42 +3,12 @@ package database
 import (
 	"fmt"
 	"time"
+
+	"github.com/devarajang/longclaw/internal/domain"
 )
 
-// StressTest represents a stress test configuration
-type StressTest struct {
-	ID               int       `json:"id"`
-	Name             string    `json:"name"`
-	CreatedAt        time.Time `json:"created_at"`
-	TotalRequests    int       `json:"total_requests"`
-	TestTimeSecs     int       `json:"test_time_secs"`
-	RequestPerSecond int       `json:"request_per_second"`
-}
-
-// RequestLog represents a single request-response log entry
-type RequestLog struct {
-	ID           int       `json:"id"`
-	Reference    string    `json:"reference"`
-	ConnectionID string    `json:"connection_id"`
-	RequestTime  time.Time `json:"request_time"`
-	ResponseTime time.Time `json:"response_time"`
-	TimeTaken    int       `json:"time_taken"` // in milliseconds
-	CreatedAt    time.Time `json:"created_at"`
-	StressTestID int       `json:"stresstest_id"`
-}
-
-type ScheduledMessage struct {
-	ID           int       `json:"id"`
-	Reference    string    `json:"reference"`
-	Message      string    `json:"message"`
-	CreatedAt    time.Time `json:"created_at"`
-	ConnectionID string    `json:"connection_id"`
-	StressTestID int       `json:"stresstest_id"`
-	SentAt       time.Time `json:"sent_at"`
-}
-
 // Create a new stress test
-func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int) (*StressTest, error) {
+func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int) (*domain.StressTest, error) {
 	result, err := s.db.Exec(
 		"INSERT INTO stress_test (name, test_time_secs, request_per_second) VALUES (?, ?, ?)",
 		name, testTimeSecs, requestsPerSecond,
@@ -52,7 +22,7 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 		return nil, err
 	}
 
-	return &StressTest{
+	return &domain.StressTest{
 		ID:               int(id),
 		Name:             name,
 		CreatedAt:        time.Now(),
@@ -105,8 +75,8 @@ func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, re
 }
 
 // Get stress test by ID
-func (s *StressTestDB) GetStressTest(id int) (*StressTest, error) {
-	var test StressTest
+func (s *StressTestDB) GetStressTest(id int) (*domain.StressTest, error) {
+	var test domain.StressTest
 	err := s.db.QueryRow(
 		"SELECT id, name, created_at, total_requests, test_time_secs, request_per_second FROM stress_test WHERE id = ?",
 		id,
@@ -119,7 +89,7 @@ func (s *StressTestDB) GetStressTest(id int) (*StressTest, error) {
 }
 
 // Get request logs for a stress test
-func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]RequestLog, error) {
+func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]domain.RequestLog, error) {
 	rows, err := s.db.Query(
 		"SELECT id, request_time, response_time, time_taken, created_at, stresstest_id, reference FROM request_response_log WHERE stresstest_id = ?",
 		stressTestID,
@@ -129,9 +99,9 @@ func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]RequestLog, error) {
 	}
 	defer rows.Close()
 
-	var logs []RequestLog
+	var logs []domain.RequestLog
 	for rows.Next() {
-		var log RequestLog
+		var log domain.RequestLog
 		err := rows.Scan(&log.ID, &log.RequestTime, &log.ResponseTime, &log.TimeTaken, &log.CreatedAt, &log.StressTestID, &log.Reference)
 		if err != nil {
 			return nil, err

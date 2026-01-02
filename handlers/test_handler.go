@@ -5,12 +5,12 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/devarajang/longclaw/database"
+	"github.com/devarajang/longclaw/internal/domain"
 )
 
 func (h *Handlers) CreateTest(w http.ResponseWriter, r *http.Request) {
 	// Create a new stress test (from handler)
-	var stressTestReq = database.StressTest{}
+	var stressTestReq = domain.StressTest{}
 	if err := json.NewDecoder(r.Body).Decode(&stressTestReq); err != nil {
 		http.Error(w, `{"error": "Invalid JSON"}`, http.StatusBadRequest)
 		return

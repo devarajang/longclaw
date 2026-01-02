@@ -17,6 +17,7 @@ import (
 
 	"github.com/devarajang/longclaw/database"
 	"github.com/devarajang/longclaw/internal/config"
+	"github.com/devarajang/longclaw/internal/domain"
 	"github.com/devarajang/longclaw/iso"
 	"github.com/devarajang/longclaw/utils"
 )
@@ -211,7 +212,7 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 	return fmt.Sprintf("Client socket validation:  %v,  %s", testStatus, err), nil
 }
 
-func (server *IsoServer) RunStress(stressTest database.StressTest, isoSpec *iso.IsoSpec) {
+func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
 	// 1. Create a context with timeout based on stress test duration
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(stressTest.TestTimeSecs)*time.Second)
 	defer cancel() // Ensure context is cancelled when function exits
@@ -242,7 +243,7 @@ func (server *IsoServer) RunStress(stressTest database.StressTest, isoSpec *iso.
 	}
 }
 
-func sendSingleMessage(conn *IsoConnection, stressTest database.StressTest, isoSpec *iso.IsoSpec) {
+func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
 	reference := utils.GenerateTimestampID()
 	randomTemplate := utils.RandomTemplate()
 
