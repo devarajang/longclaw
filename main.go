@@ -6,6 +6,7 @@ import (
 	"github.com/devarajang/longclaw/database"
 	"github.com/devarajang/longclaw/handlers"
 	"github.com/devarajang/longclaw/internal/config"
+	"github.com/devarajang/longclaw/internal/domain"
 
 	"github.com/devarajang/longclaw/iso"
 	network "github.com/devarajang/longclaw/network/server"
@@ -67,7 +68,7 @@ func main() {
 	go isoServer.StartListen()
 
 	str := &runner.StressTestRunner{
-		StressChannel: make(chan database.StressTest),
+		StressChannel: make(chan domain.StressTest),
 		IsoSpec:       isoSpec,
 		Server:        isoServer,
 	}

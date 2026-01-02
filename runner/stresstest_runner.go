@@ -3,13 +3,13 @@ package runner
 import (
 	"fmt"
 
-	"github.com/devarajang/longclaw/database"
+	"github.com/devarajang/longclaw/internal/domain"
 	"github.com/devarajang/longclaw/iso"
 	network "github.com/devarajang/longclaw/network/server"
 )
 
 type StressTestRunner struct {
-	StressChannel chan database.StressTest
+	StressChannel chan domain.StressTest
 	IsoSpec       *iso.IsoSpec
 	Server        *network.IsoServer
 }
