@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -21,6 +22,8 @@ import (
 	"github.com/devarajang/longclaw/iso"
 	"github.com/devarajang/longclaw/utils"
 )
+
+var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type IsoRequestResponse struct {
 	requestTime  time.Time
@@ -195,6 +198,22 @@ func validateClient(connState tls.ConnectionState, expectedCN string) error {
 	return nil
 }
 
+func (server *IsoServer) SendMessage(clientId string, rawMsg string) error {
+	conn, ok := server.connMap[clientId]
+	if !ok {
+		return errors.New("client not found: " + clientId)
+	}
+	req := IsoRequestResponse{
+		rawRequest: []byte(rawMsg),
+	}
+	select {
+	case conn.writeChannel <- req:
+		return nil
+	default:
+		return errors.New("write channel full for client: " + clientId)
+	}
+}
+
 func (server *IsoServer) TestConnection(clientId string) (string, error) {
 	conn, ok := server.connMap[clientId]
 
@@ -352,8 +371,19 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 		return
 	}
 	// Complete the handshake so certs are available
+	log.Printf("[TLS] Starting handshake with %v", remoteAddr)
 	if err := tlsConn.Handshake(); err != nil {
-		log.Println("TLS handshake error:", err)
+		log.Printf("[TLS] Handshake failed from %v: %v", remoteAddr, err)
+		return
+	}
+	log.Printf("[TLS] Handshake complete with %v", remoteAddr)
+
+	// Simulate random 8 percent disconnect after client cert is received
+	roll := rng.Intn(100)
+	log.Printf("[TLS] Random roll: %d (0=disconnect, 1=allow) for %v", roll, remoteAddr)
+	if roll <= 8 {
+		log.Printf("[TLS] Simulated disconnect after handshake from %v", remoteAddr)
+		conn.Close()
 		return
 	}
 
@@ -415,6 +445,7 @@ func (server *IsoServer) StartListen() error {
 		if err != nil {
 			return err
 		}
+		log.Printf("[TCP] New connection from %v", conn.RemoteAddr())
 		go server.HandleNewConnect(conn)
 	}
 }
