@@ -155,12 +155,8 @@ func (c *IsoConnection) HandleChannelEvents() {
 			buf = append(buf, msg.rawRequest...)
 
 			_, err := c.conn.Write(buf)
-			// Write to  database once the write to socket is done
-			//var t time.Time
-			err = c.db.AddRequestLog(msg.stressTestId, time.Now(),
-				msg.reference, c.conn.RemoteAddr().String())
 			if err != nil {
-				log.Println("DB Write error:", err)
+				log.Println("Socket write error:", err)
 				return
 			}
 		case <-c.closeChannel:
@@ -327,6 +323,11 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		reference:    reference,
 		stressTestId: stressTest.ID,
 		rawRequest:   []byte(isoMessage.FormatIso()),
+	}
+
+	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String()); err != nil {
+		log.Println("DB Write error:", err)
+		return
 	}
 
 	select {
