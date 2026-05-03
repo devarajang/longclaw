@@ -2,30 +2,60 @@ package database
 
 import (
 	"database/sql"
-	"log"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type StressTestDB struct {
-	db *sql.DB
+	db                *sql.DB
+	requestLogQueue   chan RequestLogEntry
+	scheduledMsgQueue chan ScheduledMessageEntry
 }
 
 // Initialize database and create tables if they don't exist
 func NewStressTestDB(dbPath string) (*StressTestDB, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create database directory: %w", err)
+	}
+
 	// Open database (creates if not exists)
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
+	// SQLite handles concurrency best with a single shared connection.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	defer func() {
+		if err != nil {
+			_ = db.Close()
+		}
+	}()
 
 	// Enable WAL Mode
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
-		log.Fatal("Failed to enable WAL:", err)
+	var journalMode string
+	if err = db.QueryRow(`PRAGMA journal_mode = WAL;`).Scan(&journalMode); err != nil {
+		return nil, fmt.Errorf("enable WAL: %w", err)
+	}
+	if journalMode != "wal" {
+		return nil, fmt.Errorf("enable WAL: sqlite returned %q", journalMode)
 	}
 
 	// Improve performance for WAL mode (optional)
-	db.Exec(`PRAGMA synchronous = NORMAL;`)
+	if _, err = db.Exec(`PRAGMA synchronous = NORMAL;`); err != nil {
+		return nil, fmt.Errorf("set synchronous mode: %w", err)
+	}
+	if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+	if _, err = db.Exec(`PRAGMA busy_timeout = 15000;`); err != nil {
+		return nil, fmt.Errorf("set busy timeout: %w", err)
+	}
 	// Create stress_test table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS stress_test (
@@ -76,10 +106,25 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 		return nil, err
 	}
 
-	return &StressTestDB{db: db}, nil
+	sdb := &StressTestDB{
+		db:                db,
+		requestLogQueue:   make(chan RequestLogEntry, 2000),
+		scheduledMsgQueue: make(chan ScheduledMessageEntry, 2000),
+	}
+
+	// Start background writer goroutines
+	go sdb.requestLogWriter(sdb.requestLogQueue)
+	go sdb.scheduledMessageWriter(sdb.scheduledMsgQueue)
+
+	return sdb, nil
 }
 
-// Close database connection
+// Close database connection and writer goroutines
 func (s *StressTestDB) Close() error {
+	// Close channels to signal writers to stop
+	close(s.requestLogQueue)
+	close(s.scheduledMsgQueue)
+	// Give writers time to flush pending items
+	time.Sleep(500 * time.Millisecond)
 	return s.db.Close()
 }

@@ -38,10 +38,10 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(h.Version))
 }
 
-func (h *Handlers) StartServer(addr string) {
+func (h *Handlers) StartServer(addr string) error {
 	h.routes()
 	log.Println("Starting HTTP server", addr)
-	http.ListenAndServe(addr, h.Mux)
+	return http.ListenAndServe(addr, h.Mux)
 
 }
 
