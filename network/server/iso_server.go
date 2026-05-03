@@ -12,8 +12,10 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devarajang/longclaw/database"
@@ -35,55 +37,154 @@ type IsoRequestResponse struct {
 }
 
 type IsoConnection struct {
-	conn         net.Conn
-	readChannel  chan IsoRequestResponse
-	writeChannel chan IsoRequestResponse
-	closeChannel chan struct{}
-	db           *database.StressTestDB
-	connTestMap  sync.Map
+	conn            net.Conn
+	readChannel     chan IsoRequestResponse
+	writeChannel    chan IsoRequestResponse
+	closeChannel    chan struct{}
+	db              *database.StressTestDB
+	connTestMap     sync.Map
+	remoteAddr      string
+	server          *IsoServer
+	writeSuccess    atomic.Int64
+	writeFailed     atomic.Int64
+	writeErrorsMu   sync.Mutex
+	writeErrorTypes map[string]int64 // error classification -> count
+	receivedCount   atomic.Int64     // count of messages received (for batched logging)
+}
+
+func (c *IsoConnection) recordWriteError(err error) {
+	var key string
+	var netErr net.Error
+	switch {
+	case errors.As(err, &netErr) && netErr.Timeout():
+		key = "timeout"
+	default:
+		msg := err.Error()
+		switch {
+		case containsAny(msg, "broken pipe", "connection reset", "forcibly closed"):
+			key = "broken_pipe/reset"
+		case containsAny(msg, "use of closed", "closed network"):
+			key = "use_of_closed"
+		case containsAny(msg, "EOF"):
+			key = "eof"
+		default:
+			key = "other: " + msg
+		}
+	}
+	c.writeErrorsMu.Lock()
+	if c.writeErrorTypes == nil {
+		c.writeErrorTypes = make(map[string]int64)
+	}
+	c.writeErrorTypes[key]++
+	c.writeErrorsMu.Unlock()
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (c *IsoConnection) resetWriteStats() {
+	c.writeSuccess.Store(0)
+	c.writeFailed.Store(0)
+	c.receivedCount.Store(0)
+	c.writeErrorsMu.Lock()
+	c.writeErrorTypes = make(map[string]int64)
+	c.writeErrorsMu.Unlock()
+}
+
+func (c *IsoConnection) writeErrorSummary() map[string]int64 {
+	c.writeErrorsMu.Lock()
+	defer c.writeErrorsMu.Unlock()
+	out := make(map[string]int64, len(c.writeErrorTypes))
+	for k, v := range c.writeErrorTypes {
+		out[k] = v
+	}
+	return out
 }
 
 func (c *IsoConnection) HandleRead() {
+	defer func() {
+		close(c.closeChannel)
+		_ = c.conn.Close()
+		if c.server != nil {
+			delete(c.server.connMap, c.remoteAddr)
+			log.Printf("[CLEANUP] Connection removed from map: %s", c.remoteAddr)
+		}
+		// Log final received count
+		finalCount := c.receivedCount.Load()
+		if finalCount > 0 {
+			log.Printf("[RECEIVED] Final count from %s: %d messages", c.remoteAddr, finalCount)
+		}
+	}()
+
+	// Start a ticker to log received count every 60 seconds
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C {
+			count := c.receivedCount.Load()
+			if count > 0 {
+				log.Printf("[RECEIVED] %s: %d messages in last 60 seconds", c.remoteAddr, count)
+				c.receivedCount.Store(0) // Reset counter
+			}
+		}
+	}()
 
 	for {
-		// buf := make([]byte, 4096)
-		// n, err := c.conn.Read(buf)
-		// Usage
-		//log.Println("Reading length-prefixed message from", c.conn.RemoteAddr())
+		// Use longer timeout for idle clients (stress test may have idle periods)
+		_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		message, err := readLengthPrefixedMessage(c.conn)
 		if err != nil {
-			log.Printf("Error: %v", err)
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				// Timeout is non-fatal, keep connection open
+				continue
+			}
+			// Check for wrapped timeout
+			if errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			log.Printf("[READ] Closed from %s: %v", c.remoteAddr, err)
 			return
 		}
 		n := len(message)
-		log.Printf("Received %d bytes: %s", n, string(message))
+		c.receivedCount.Add(1) // Increment counter instead of logging each message
 
-		req := IsoRequestResponse{
-			//requestTime:  time.Now(),
-			responseTime: time.Now(),
-			rawRequest:   message[0:n],
-		}
-		//log.Println("Reading data from ", c.conn.RemoteAddr())
-		//log.Println("Read data:", string(req.rawRequest))
 		msgBody := string(message[0:n])
-		if msgBody[0:4] == "0810" || msgBody[0:4] == "0800" {
+		if len(msgBody) > 46 && (msgBody[0:4] == "0810" || msgBody[0:4] == "0800") {
 			stan := msgBody[36:46]
 			if waitChan, ok := c.connTestMap.Load(stan); ok {
-				waitChan.(chan string) <- msgBody
+				select {
+				case waitChan.(chan string) <- msgBody:
+				default:
+				}
 			}
 		}
 
-		isoMessage, err := iso.NewIso8583Message(msgBody, utils.GlobalIsoSpec)
-		req.reference = isoMessage.GetField(36)
-
-		c.db.UpdateResponseTime(req.reference, c.conn.RemoteAddr().String())
+		go func(msg string) {
+			isoMessage, err := iso.NewIso8583Message(msg, utils.GlobalIsoSpec)
+			if err == nil {
+				ref := isoMessage.GetField(36)
+				_ = c.db.UpdateResponseTime(ref, c.remoteAddr)
+			}
+		}(msgBody)
 	}
 }
 func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	// Read 2-byte length prefix
 	lengthBytes := make([]byte, 2)
 	if _, err := io.ReadFull(conn, lengthBytes); err != nil {
-		return nil, fmt.Errorf("failed to read length prefix: %v", err)
+		return nil, fmt.Errorf("failed to read length prefix: %w", err)
 	}
 
 	// Convert to length (big-endian)
@@ -92,7 +193,7 @@ func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	// Read the actual message
 	message := make([]byte, length)
 	if _, err := io.ReadFull(conn, message); err != nil {
-		return nil, fmt.Errorf("failed to read message: %v", err)
+		return nil, fmt.Errorf("failed to read message: %w", err)
 	}
 
 	return message, nil
@@ -100,7 +201,7 @@ func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 
 func (sc *IsoConnection) Close() {
 	close(sc.closeChannel)
-	sc.conn.Close()
+	_ = sc.conn.Close()
 }
 
 func (c *IsoConnection) TestConnection() (bool, error) {
@@ -128,9 +229,9 @@ func (c *IsoConnection) TestConnection() (bool, error) {
 	copy(buf[2:], isoMessage)
 
 	// Set a timeout for the write operation
-	c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, err := c.conn.Write(buf)
-	c.conn.SetWriteDeadline(time.Time{}) // Reset
+	_ = c.conn.SetWriteDeadline(time.Time{}) // Reset
 	if err != nil {
 		return false, err
 	}
@@ -144,25 +245,85 @@ func (c *IsoConnection) TestConnection() (bool, error) {
 }
 
 func (c *IsoConnection) HandleChannelEvents() {
+	// NOTE: We intentionally do NOT set a write deadline here.
+	//
+	// Why: Go's crypto/tls requires writes to be atomic. If SetWriteDeadline fires
+	// mid-write, the TLS record layer is left in a corrupt state, and every
+	// subsequent Write() on that connection fails immediately — even though the
+	// underlying TCP session is still alive. This caused the "1000+ consecutive
+	// write errors" cascade observed during stress tests.
+	//
+	// Instead, we rely on channel-level backpressure:
+	//   - writeChannel has a fixed capacity (512 slots).
+	//   - sendSingleMessage uses a non-blocking send, dropping and counting
+	//     messages as "queue-dropped" when the channel is full.
+	//   - If TCP send buffer is full, this goroutine blocks on Write() — that is
+	//     intentional, as it is the dedicated writer goroutine for this connection.
+	//   - TCP keepalive (set on the raw conn below) will detect dead peers.
+	//
+	// A true dead-peer scenario (where Write blocks forever) is caught by
+	// HandleRead: when the peer closes the connection, HandleRead returns, closes
+	// closeChannel, and this select exits via the closeChannel case.
+
+	const maxLoggedConsecutiveWriteErrors = 3
+	const suppressedLogInterval = 10 * time.Second
+	consecutiveWriteErrors := 0
+	suppressWriteErrorLogs := false
+	suppressedErrorCount := 0
+	lastSuppressedLogAt := time.Time{}
+
 	for {
 		select {
 		case msg := <-c.writeChannel:
-
-			log.Println("Writing data to ", msg.reference, c.conn.RemoteAddr())
+			if msg.reference == "" {
+				continue
+			}
 
 			buf := make([]byte, 2)
 			binary.BigEndian.PutUint16(buf, uint16(len(msg.rawRequest)))
 			buf = append(buf, msg.rawRequest...)
 
+			// No write deadline — see comment above.
 			_, err := c.conn.Write(buf)
-			// Write to  database once the write to socket is done
-			//var t time.Time
-			err = c.db.AddRequestLog(msg.stressTestId, time.Now(),
-				msg.reference, c.conn.RemoteAddr().String())
+
 			if err != nil {
-				log.Println("DB Write error:", err)
-				return
+				c.writeFailed.Add(1)
+				c.recordWriteError(err)
+				consecutiveWriteErrors++
+				if consecutiveWriteErrors <= maxLoggedConsecutiveWriteErrors {
+					log.Printf("[WRITE] Error to %s (consecutive=%d): %v", c.remoteAddr, consecutiveWriteErrors, err)
+				} else if !suppressWriteErrorLogs {
+					suppressWriteErrorLogs = true
+					suppressedErrorCount = 1
+					lastSuppressedLogAt = time.Now()
+					log.Printf("[WRITE] Too many consecutive errors to %s (> %d). Suppressing further write error logs until recovery.", c.remoteAddr, maxLoggedConsecutiveWriteErrors)
+				} else {
+					suppressedErrorCount++
+					now := time.Now()
+					if now.Sub(lastSuppressedLogAt) >= suppressedLogInterval {
+						log.Printf("[WRITE] Still suppressed for %s: %d additional write errors in last interval (consecutive=%d)", c.remoteAddr, suppressedErrorCount, consecutiveWriteErrors)
+						suppressedErrorCount = 0
+						lastSuppressedLogAt = now
+					}
+				}
+				// Keep connection open — this is a stress test tool.
+				// Drop the failed message and continue draining the write channel.
+				continue
 			}
+
+			if consecutiveWriteErrors > 0 {
+				if suppressWriteErrorLogs && suppressedErrorCount > 0 {
+					log.Printf("[WRITE] Recovered for %s after %d consecutive write errors (%d errors were suppressed). Resuming normal error logging.", c.remoteAddr, consecutiveWriteErrors, suppressedErrorCount)
+				} else {
+					log.Printf("[WRITE] Recovered for %s after %d consecutive write errors. Resuming normal error logging.", c.remoteAddr, consecutiveWriteErrors)
+				}
+				consecutiveWriteErrors = 0
+				suppressWriteErrorLogs = false
+				suppressedErrorCount = 0
+				lastSuppressedLogAt = time.Time{}
+			}
+			c.writeSuccess.Add(1)
+
 		case <-c.closeChannel:
 			return
 		}
@@ -234,39 +395,133 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
 	// 1. Create a context with timeout based on stress test duration
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(stressTest.TestTimeSecs)*time.Second)
-	defer cancel() // Ensure context is cancelled when function exits
+	defer cancel()
 
 	// Calculate interval for desired RPS
 	interval := time.Second / time.Duration(stressTest.RequestPerSecond)
-	ticker := time.NewTicker(interval) // Creates a ticker that fires at the calculated interval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	count := 0 // Track number of iterations
+	count := 0                // Track number of ticks
+	totalMessagesSent := 0    // Track actual messages sent
+	totalMessagesDropped := 0 // Track dropped messages
+	perClientSent := make(map[string]int)
+	perClientDropped := make(map[string]int)
+
+	resetMetrics := func() {
+		count = 0
+		totalMessagesSent = 0
+		totalMessagesDropped = 0
+		clear(perClientSent)
+		clear(perClientDropped)
+	}
+	defer func() {
+		resetMetrics()
+		log.Printf("[STRESS] Metrics reset for test id=%d", stressTest.ID)
+	}()
+
+	// Pre-capture initial clients and log
+	connectedClients := server.GetConnectedClients()
+	initialClientCount := len(connectedClients)
+	log.Printf("[STRESS] Starting test with %d clients: %v", initialClientCount, connectedClients)
+	for _, c := range connectedClients {
+		perClientSent[c] = 0
+		perClientDropped[c] = 0
+		// Reset per-connection socket write counters so each test run starts clean.
+		if isoConn, ok := server.connMap[c]; ok {
+			isoConn.resetWriteStats()
+		}
+	}
+
+	// Pre-calculate total expected messages: one selected client per tick
+	totalMessagesExpected := stressTest.RequestPerSecond * stressTest.TestTimeSecs
+	roundRobinIndex := 0
+
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("Stress test completed: %d requests sent\n", count)
+			fmt.Printf("Stress test completed: %d ticks, %d total messages sent, %d dropped (expected: %d)\n", count, totalMessagesSent, totalMessagesDropped, totalMessagesExpected)
+			fmt.Printf("[SUMMARY] Per-client stats:\n")
+			for _, clientAddr := range connectedClients {
+				sent := perClientSent[clientAddr]
+				dropped := perClientDropped[clientAddr]
+				total := sent + dropped
+				successRate := 0.0
+				if total > 0 {
+					successRate = float64(sent) / float64(total) * 100
+				}
+				conn, stillConnected := server.connMap[clientAddr]
+				status := "ACTIVE"
+				if !stillConnected {
+					status = "DISCONNECTED"
+				}
+				var wSuccess, wFailed int64
+				var errTypes map[string]int64
+				if stillConnected && conn != nil {
+					wSuccess = conn.writeSuccess.Load()
+					wFailed = conn.writeFailed.Load()
+					errTypes = conn.writeErrorSummary()
+				}
+				fmt.Printf("  %s: queued-sent=%d, queued-dropped=%d, queue-success=%.1f%% | socket-written=%d, socket-failed=%d [%s]\n",
+					clientAddr, sent, dropped, successRate, wSuccess, wFailed, status)
+				if len(errTypes) > 0 {
+					fmt.Printf("    Write error breakdown:\n")
+					for errType, errCount := range errTypes {
+						fmt.Printf("      %-30s : %d\n", errType, errCount)
+					}
+				}
+			}
+			fmt.Printf("\n[DATABASE] Query logs in database:\n")
+			fmt.Printf("  SELECT COUNT(*) FROM request_response_log WHERE stresstest_id=%d\n", stressTest.ID)
+			fmt.Printf("  SELECT connection_id, COUNT(*) FROM request_response_log WHERE stresstest_id=%d GROUP BY connection_id\n", stressTest.ID)
+			fmt.Printf("\n[NOTE] Database logs may be lower than messages sent due to async write failures.\n")
+			fmt.Printf("       Check logs for [DB_ERROR] to see write failures.\n")
 			return
 		case <-ticker.C:
-			// Send to all connections
-			for _, connName := range server.GetConnectedClients() {
-				conn, ok := server.connMap[connName]
-				if !ok {
-					continue
-				}
+			// Send to one currently connected client per tick using round-robin.
+			liveClients := server.GetConnectedClients()
+			if len(liveClients) == 0 {
+				totalMessagesDropped++
+				count++
+				continue
+			}
 
-				go sendSingleMessage(conn, stressTest, isoSpec)
+			// Keep order stable so each client gets an even share over time.
+			sort.Strings(liveClients)
+			if roundRobinIndex >= len(liveClients) {
+				roundRobinIndex = 0
+			}
+			connName := liveClients[roundRobinIndex]
+			roundRobinIndex++
+			conn, ok := server.connMap[connName]
+			if !ok {
+				perClientDropped[connName]++
+				totalMessagesDropped++
+				count++
+				continue
+			}
+
+			if _, seen := perClientSent[connName]; !seen {
+				perClientSent[connName] = 0
+				perClientDropped[connName] = 0
+			}
+
+			// Use non-blocking send to avoid blocking
+			if sendSingleMessage(conn, stressTest, isoSpec) {
+				totalMessagesSent++
+				perClientSent[connName]++
+			} else {
+				totalMessagesDropped++
+				perClientDropped[connName]++
 			}
 			count++
 		}
 	}
 }
 
-func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
+func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) bool {
 	reference := utils.GenerateTimestampID()
 	randomTemplate := utils.RandomTemplate()
-
-	//var err error
 
 	card := utils.GetRandomCard()
 
@@ -286,7 +541,6 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 			ind := strings.Index(de123, "CV")
 
 			if ind > -1 {
-				//de123[ind+2 : 2]
 				lenStr := utils.Substr(de123, ind+2, 2)
 				sb := strings.Builder{}
 				sb.WriteString(utils.Substr(de123, 0, ind))
@@ -300,8 +554,6 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 					sb.WriteString(card.CVV2)
 					sb.WriteString("M")
 				}
-				fmt.Println(de123)
-				fmt.Println(sb.String())
 				isoMessage.SetField(122, sb.String())
 			}
 		}
@@ -311,47 +563,40 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 	}
 
 	var isoMessage, scheduledMessage *iso.Iso8583Message
+	requestTime := time.Now()
+
 	if randomTemplate.OriginalMessage != "" {
 		isoMessage, _ = getIsoMessage(randomTemplate.OriginalMessage)
 		scheduledMessage, _ = getIsoMessage(randomTemplate.Message)
-		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
+
+		// Queue async DB write for scheduled message (fires immediately, writes happen in background)
+		conn.db.AddScheduledMessage(stressTest.ID, requestTime, reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
 	} else {
 		isoMessage, _ = getIsoMessage(randomTemplate.Message)
 	}
 
-	/*if err != nil {
-	fmt.Println("ISO Error:", err)
-	return
-	}*/
 	req := IsoRequestResponse{
 		reference:    reference,
 		stressTestId: stressTest.ID,
 		rawRequest:   []byte(isoMessage.FormatIso()),
 	}
 
+	// Non-blocking send
 	select {
 	case conn.writeChannel <- req:
+		// Queue async DB write for request log (fires immediately, writes happen in background)
+		conn.db.AddRequestLog(stressTest.ID, requestTime, reference, conn.conn.RemoteAddr().String())
+		return true
 	default:
-		fmt.Println("Write channel full, skipping message")
-	}
-	if randomTemplate.OriginalMessage != "" {
-		req = IsoRequestResponse{
-			reference:    utils.GenerateTimestampID(),
-			stressTestId: stressTest.ID,
-			rawRequest:   []byte(scheduledMessage.FormatIso()),
-		}
-		select {
-		case conn.writeChannel <- req:
-		default:
-			fmt.Println("Write channel full, skipping message")
-		}
+		log.Printf("[DROP] Write channel full for %s (buffer: %d/%d)", conn.remoteAddr, len(conn.writeChannel), cap(conn.writeChannel))
+		return false
 	}
 }
 
 func (server *IsoServer) GetConnectedClients() []string {
-	keys := make([]string, len(server.connMap))
+	keys := make([]string, 0, len(server.connMap))
 
-	for key, _ := range server.connMap {
+	for key := range server.connMap {
 		if len(key) > 0 {
 			keys = append(keys, key)
 		}
@@ -378,14 +623,21 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	}
 	log.Printf("[TLS] Handshake complete with %v", remoteAddr)
 
+	// Enable TCP keepalive on the underlying connection so the OS detects
+	// silently dead peers (no FIN/RST) and unblocks any pending Write().
+	if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
 	// Simulate random 8 percent disconnect after client cert is received
-	roll := rng.Intn(100)
+	/*roll := rng.Intn(100)
 	log.Printf("[TLS] Random roll: %d (0=disconnect, 1=allow) for %v", roll, remoteAddr)
 	if roll <= 8 {
 		log.Printf("[TLS] Simulated disconnect after handshake from %v", remoteAddr)
 		conn.Close()
 		return
-	}
+	}*/
 
 	// Validate client certificate Org
 	if err := validateClient(tlsConn.ConnectionState(), server.config.TLS.ExpectedCN); err != nil {
@@ -395,10 +647,14 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 
 	isoConn := &IsoConnection{
 		conn:         conn,
-		readChannel:  make(chan IsoRequestResponse, 16),
-		writeChannel: make(chan IsoRequestResponse, 16),
+		readChannel:  make(chan IsoRequestResponse, 256),
+		writeChannel: make(chan IsoRequestResponse, 512),
+		//readChannel:  make(chan IsoRequestResponse, 512),
+		//writeChannel: make(chan IsoRequestResponse, 4096),
 		closeChannel: make(chan struct{}),
 		db:           server.db,
+		remoteAddr:   remoteAddr.String(),
+		server:       server,
 	}
 	server.connMap[remoteAddr.String()] = isoConn
 
@@ -433,7 +689,7 @@ func (server *IsoServer) StartListen() error {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	listener, err := tls.Listen("tcp", ":8443", tlsConfig)
+	listener, err := tls.Listen("tcp", server.config.Server.ISOPort, tlsConfig)
 
 	if err != nil {
 		return err
@@ -458,5 +714,5 @@ func NewIsoServer(db *database.StressTestDB, cfg *config.Config) (*IsoServer, er
 		db:      db,
 	}
 
-	return &server, errors.New("Unable to create the server")
+	return &server, nil
 }
