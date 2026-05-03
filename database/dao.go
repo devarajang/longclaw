@@ -34,12 +34,14 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string) error {
 	// First, get the request_time
 	var requestTime time.Time
-	err := s.db.QueryRow(
-		"SELECT request_time FROM request_response_log WHERE reference = ? AND connection_id = ?",
-		reference, connectionID,
-	).Scan(&requestTime)
+	err := withSQLiteBusyRetry(func() error {
+		return s.db.QueryRow(
+			"SELECT request_time FROM request_response_log WHERE reference = ? AND connection_id = ?",
+			reference, connectionID,
+		).Scan(&requestTime)
+	})
 	if err != nil {
-		return fmt.Errorf("failed to get request time: %v", err)
+		return fmt.Errorf("failed to get request time: %w", err)
 	}
 
 	// Calculate time taken in nanoseconds
@@ -47,31 +49,28 @@ func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string)
 	timeTaken := responseTime.Sub(requestTime).Milliseconds()
 
 	// Update with calculated value
-	_, err = s.db.Exec(
-		"UPDATE request_response_log SET response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
-		responseTime, timeTaken, reference, connectionID,
-	)
+	err = withSQLiteBusyRetry(func() error {
+		_, execErr := s.db.Exec(
+			"UPDATE request_response_log SET response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
+			responseTime, timeTaken, reference, connectionID,
+		)
+		return execErr
+	})
 	if err != nil {
-		return fmt.Errorf("failed to update response log: %v", err)
+		return fmt.Errorf("failed to update response log: %w", err)
 	}
 
 	return err
 }
 
-// Add scheduled message to table
+// Add scheduled message to table (queued write)
 func (s *StressTestDB) AddScheduledMessage(stressTestID int, createdAt time.Time, reference string, connectionID string, message string) error {
-	_, err := s.db.Exec("INSERT INTO scheduled_message(stresstest_id, created_at, reference, connection_id, message) VALUES (?,?,?,?,?)",
-		stressTestID, createdAt, reference, connectionID, message)
-	return err
+	return s.EnqueueScheduledMessage(stressTestID, createdAt, reference, connectionID, message)
 }
 
-// Add a request-response log entry
+// Add a request-response log entry (queued write)
 func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionID string) error {
-	_, err := s.db.Exec(
-		"INSERT INTO request_response_log (stresstest_id, request_time, reference,connection_id) VALUES (?, ?, ?, ?)",
-		stressTestID, requestTime, reference, connectionID)
-	//fmt.Println(err.Error())
-	return err
+	return s.EnqueueRequestLog(stressTestID, requestTime, reference, connectionID)
 }
 
 // Get stress test by ID
