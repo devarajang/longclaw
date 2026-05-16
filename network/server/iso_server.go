@@ -44,12 +44,7 @@ type IsoConnection struct {
 }
 
 func (c *IsoConnection) HandleRead() {
-
 	for {
-		// buf := make([]byte, 4096)
-		// n, err := c.conn.Read(buf)
-		// Usage
-		//log.Println("Reading length-prefixed message from", c.conn.RemoteAddr())
 		message, err := readLengthPrefixedMessage(c.conn)
 		if err != nil {
 			log.Printf("Error: %v", err)
@@ -58,25 +53,39 @@ func (c *IsoConnection) HandleRead() {
 		n := len(message)
 		log.Printf("Received %d bytes: %s", n, string(message))
 
-		req := IsoRequestResponse{
-			//requestTime:  time.Now(),
-			responseTime: time.Now(),
-			rawRequest:   message[0:n],
-		}
-		//log.Println("Reading data from ", c.conn.RemoteAddr())
-		//log.Println("Read data:", string(req.rawRequest))
 		msgBody := string(message[0:n])
-		if msgBody[0:4] == "0810" || msgBody[0:4] == "0800" {
+		mti := msgBody[0:4]
+
+		// Echo-test path: route 0810 responses back to our own 0800 pings.
+		if mti == "0810" || mti == "0800" {
 			stan := msgBody[36:46]
 			if waitChan, ok := c.connTestMap.Load(stan); ok {
 				waitChan.(chan string) <- msgBody
+				continue
 			}
 		}
 
 		isoMessage, err := iso.NewIso8583Message(msgBody, utils.GlobalIsoSpec)
-		req.reference = isoMessage.GetField(36)
+		if err != nil {
+			log.Printf("Parse error: %v", err)
+			continue
+		}
 
-		c.db.UpdateResponseTime(req.reference, c.conn.RemoteAddr().String())
+		switch {
+		case isRequestMTI(mti):
+			resp, err := buildResponse(isoMessage)
+			if err != nil {
+				log.Printf("Response build error: %v", err)
+				continue
+			}
+			select {
+			case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
+			default:
+				log.Println("Write channel full, dropping response")
+			}
+		case isResponseMTI(mti):
+			c.db.UpdateResponseTime(isoMessage.GetField(36), c.conn.RemoteAddr().String())
+		}
 	}
 }
 func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {

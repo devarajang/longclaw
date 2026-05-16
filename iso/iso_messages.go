@@ -126,6 +126,38 @@ func (m *Iso8583Message) FormatPrint() string {
 	return sb.String()
 }
 
+// NewResponseMessage deep-copies req and replaces the MTI with responseMTI.
+// Call MarkField + SetField to add/override response-specific fields before FormatIso.
+func NewResponseMessage(req *Iso8583Message, responseMTI string) *Iso8583Message {
+	resp := &Iso8583Message{
+		message:       responseMTI + req.message[4:],
+		isoSpec:       req.isoSpec,
+		primaryBitMap: &BitSet{data: req.primaryBitMap.data},
+	}
+	if req.secondaryBitMap != nil {
+		resp.secondaryBitMap = &BitSet{data: req.secondaryBitMap.data}
+	}
+	resp.fields = make(map[int]string)
+	for k, v := range req.fields {
+		resp.fields[k] = v
+	}
+	return resp
+}
+
+// MarkField sets the bitmap bit for fieldIdx so FormatIso includes that field in output.
+// fieldIdx is the same key used in GetField/SetField (spec field number − 1).
+func (m *Iso8583Message) MarkField(fieldIdx int) {
+	if fieldIdx < 64 {
+		m.primaryBitMap.SetBit(fieldIdx, true)
+	} else {
+		m.primaryBitMap.SetBit(0, true) // enable secondary bitmap
+		if m.secondaryBitMap == nil {
+			m.secondaryBitMap = new(BitSet)
+		}
+		m.secondaryBitMap.SetBit(fieldIdx-64, true)
+	}
+}
+
 func (m *Iso8583Message) FormatIso() string {
 	//fmt.Println(m.message)
 	fieldCnt := 64
