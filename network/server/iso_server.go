@@ -579,16 +579,35 @@ func (server *IsoServer) StartListen() error {
 	if err != nil {
 		return err
 	}
+	server.connMu.Lock()
 	server.listener = listener
+	server.connMu.Unlock()
 	log.Println("Started TLS socket server", listener.Addr())
 	go reportSentPerMinute()
 	for {
-		conn, err := server.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
+			// Stop closed the listener: a normal shutdown, not a failure
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 		log.Printf("[TCP] New connection from %v", conn.RemoteAddr())
 		go server.HandleNewConnect(conn)
+	}
+}
+
+// Stop closes the listener, so StartListen returns nil, and then every client connection
+func (server *IsoServer) Stop() {
+	server.connMu.RLock()
+	listener := server.listener
+	server.connMu.RUnlock()
+	if listener != nil {
+		listener.Close()
+	}
+	for _, conn := range server.connections() {
+		conn.Close()
 	}
 }
 
