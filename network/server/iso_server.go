@@ -49,15 +49,7 @@ type IsoConnection struct {
 // writeChannelSize is how many messages a connection can queue before new ones are dropped
 const writeChannelSize = 1024
 
-// responseTimeQueueSize is how many matched responses can wait for their DB update before reading blocks
-const responseTimeQueueSize = 65536
-
 func (c *IsoConnection) HandleRead() {
-	// DB updates run in their own goroutine so a slow database never delays reading responses
-	responseTimes := make(chan IsoRequestResponse, responseTimeQueueSize)
-	defer close(responseTimes)
-	go c.writeResponseTimes(responseTimes)
-
 	defer c.Close()
 	for {
 		message, err := readLengthPrefixedMessage(c.conn)
@@ -110,17 +102,10 @@ func (c *IsoConnection) HandleRead() {
 				unmatchedCount.Add(1)
 				continue
 			}
-			responseTimes <- IsoRequestResponse{reference: reference, requestTime: sentAt.(time.Time), responseTime: receivedAt}
-		}
-	}
-}
-
-// writeResponseTimes stores matched response times until HandleRead closes the channel
-func (c *IsoConnection) writeResponseTimes(updates <-chan IsoRequestResponse) {
-	connectionID := c.conn.RemoteAddr().String()
-	for u := range updates {
-		if err := c.db.UpdateResponseTime(u.reference, connectionID, u.requestTime, u.responseTime); err != nil {
-			log.Println("Response time update error:", err)
+			// Only queues the write, so a slow database does not delay reading responses
+			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), sentAt.(time.Time), receivedAt); err != nil {
+				log.Println("Response time update error:", err)
+			}
 		}
 	}
 }

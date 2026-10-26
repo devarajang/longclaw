@@ -8,7 +8,8 @@ import (
 )
 
 type StressTestDB struct {
-	db *sql.DB
+	db     *sql.DB
+	writer *batchWriter // all hot-path writes go through here, batched into transactions
 }
 
 // Initialize database and create tables if they don't exist
@@ -82,10 +83,11 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 		return nil, err
 	}
 
-	return &StressTestDB{db: db}, nil
+	return &StressTestDB{db: db, writer: newBatchWriter(db)}, nil
 }
 
-// Close database connection
+// Close flushes queued writes, then closes the database connection
 func (s *StressTestDB) Close() error {
+	s.writer.Close()
 	return s.db.Close()
 }
