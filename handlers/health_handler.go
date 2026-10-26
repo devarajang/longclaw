@@ -62,6 +62,8 @@ func (h *Handlers) routes() {
 
 	h.Mux.HandleFunc("POST /api/stress_tests", h.CreateTest)
 
+	h.Mux.HandleFunc("GET /api/stress_tests/{id}/results", h.GetTestResults)
+
 	h.Mux.HandleFunc("POST /api/clients/message", h.SendMessage)
 
 	h.Mux.HandleFunc("GET /api/system_info", h.SystemInfo)

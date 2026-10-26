@@ -368,6 +368,9 @@ loop:
 
 	elapsed := time.Since(start)
 	log.Printf("Stress test completed: %d requests sent in %v (%.0f/s)", count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
+	if err := server.db.SetTotalRequests(stressTest.ID, count); err != nil {
+		log.Println("DB Write error:", err)
+	}
 }
 
 func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
