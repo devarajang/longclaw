@@ -51,11 +51,16 @@ func (c *IsoConnection) HandleRead() {
 			return
 		}
 		n := len(message)
+		// MTI + primary bitmap is the shortest frame that can be parsed
+		if n < 20 {
+			log.Printf("Dropping short message (%d bytes) from %v", n, c.conn.RemoteAddr())
+			continue
+		}
 		msgBody := string(message[0:n])
 		mti := msgBody[0:4]
 
 		// Echo-test path: route 0810 responses back to our own 0800 pings.
-		if mti == "0810" || mti == "0800" {
+		if (mti == "0810" || mti == "0800") && n >= 46 {
 			stan := msgBody[36:46]
 			if waitChan, ok := c.connTestMap.Load(stan); ok {
 				waitChan.(chan string) <- msgBody
@@ -273,6 +278,9 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 
 	getIsoMessage := func(message string) (*iso.Iso8583Message, error) {
 		isoMessage, err := iso.NewIso8583Message(message, isoSpec)
+		if err != nil {
+			return nil, err
+		}
 		if isoMessage.GetField(1) != "" {
 			isoMessage.SetField(1, card.CardNumber)
 		}
@@ -306,22 +314,26 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		}
 
 		isoMessage.SetField(36, reference)
-		return isoMessage, err
+		return isoMessage, nil
 	}
 
 	var isoMessage, scheduledMessage *iso.Iso8583Message
+	var err error
 	if randomTemplate.OriginalMessage != "" {
-		isoMessage, _ = getIsoMessage(randomTemplate.OriginalMessage)
-		scheduledMessage, _ = getIsoMessage(randomTemplate.Message)
-		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
+		if isoMessage, err = getIsoMessage(randomTemplate.OriginalMessage); err == nil {
+			scheduledMessage, err = getIsoMessage(randomTemplate.Message)
+		}
 	} else {
-		isoMessage, _ = getIsoMessage(randomTemplate.Message)
+		isoMessage, err = getIsoMessage(randomTemplate.Message)
+	}
+	if err != nil {
+		log.Println("Template parse error:", err)
+		return
+	}
+	if scheduledMessage != nil {
+		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
 	}
 
-	/*if err != nil {
-	fmt.Println("ISO Error:", err)
-	return
-	}*/
 	req := IsoRequestResponse{
 		reference:    reference,
 		stressTestId: stressTest.ID,
