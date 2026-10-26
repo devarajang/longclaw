@@ -90,7 +90,9 @@ func (c *IsoConnection) HandleRead() {
 				log.Println("Write channel full, dropping response")
 			}
 		case isResponseMTI(mti):
-			c.db.UpdateResponseTime(isoMessage.GetField(36), c.conn.RemoteAddr().String())
+			if err := c.db.UpdateResponseTime(isoMessage.GetField(36), c.conn.RemoteAddr().String()); err != nil {
+				log.Println("Response time update error:", err)
+			}
 		}
 	}
 }
