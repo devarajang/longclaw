@@ -42,13 +42,27 @@ type IsoConnection struct {
 	db           *database.StressTestDB
 	connTestMap  sync.Map
 	closeOnce    sync.Once
-	onClose      func() // removes the connection from the server's map
+	onClose      func()   // removes the connection from the server's map
+	sentTimes    sync.Map // reference -> time.Time the request was written to the socket
 }
 
+// writeChannelSize is how many messages a connection can queue before new ones are dropped
+const writeChannelSize = 1024
+
+// responseTimeQueueSize is how many matched responses can wait for their DB update before reading blocks
+const responseTimeQueueSize = 65536
+
 func (c *IsoConnection) HandleRead() {
+	// DB updates run in their own goroutine so a slow database never delays reading responses
+	responseTimes := make(chan IsoRequestResponse, responseTimeQueueSize)
+	defer close(responseTimes)
+	go c.writeResponseTimes(responseTimes)
+
 	defer c.Close()
 	for {
 		message, err := readLengthPrefixedMessage(c.conn)
+		// Stamp on read so time spent on our side afterwards (parsing, DB) is not counted as latency
+		receivedAt := time.Now()
 		if err != nil {
 			log.Printf("Error: %v", err)
 			return
@@ -87,12 +101,26 @@ func (c *IsoConnection) HandleRead() {
 			select {
 			case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
 			default:
-				log.Println("Write channel full, dropping response")
+				droppedCount.Add(1)
 			}
 		case isResponseMTI(mti):
-			if err := c.db.UpdateResponseTime(isoMessage.GetField(36), c.conn.RemoteAddr().String()); err != nil {
-				log.Println("Response time update error:", err)
+			reference := isoMessage.GetField(36)
+			sentAt, ok := c.sentTimes.LoadAndDelete(reference)
+			if !ok {
+				unmatchedCount.Add(1)
+				continue
 			}
+			responseTimes <- IsoRequestResponse{reference: reference, requestTime: sentAt.(time.Time), responseTime: receivedAt}
+		}
+	}
+}
+
+// writeResponseTimes stores matched response times until HandleRead closes the channel
+func (c *IsoConnection) writeResponseTimes(updates <-chan IsoRequestResponse) {
+	connectionID := c.conn.RemoteAddr().String()
+	for u := range updates {
+		if err := c.db.UpdateResponseTime(u.reference, connectionID, u.requestTime, u.responseTime); err != nil {
+			log.Println("Response time update error:", err)
 		}
 	}
 }
@@ -174,6 +202,11 @@ func (c *IsoConnection) HandleChannelEvents() {
 			binary.BigEndian.PutUint16(buf, uint16(len(msg.rawRequest)))
 			buf = append(buf, msg.rawRequest...)
 
+			if msg.reference != "" {
+				// Stamp just before the write so latency excludes time queued on our side.
+				// Stored before writing so a fast response can never arrive ahead of it.
+				c.sentTimes.Store(msg.reference, time.Now())
+			}
 			_, err := c.conn.Write(buf)
 			if err != nil {
 				log.Println("Socket write error:", err)
@@ -377,6 +410,8 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		rawRequest:   []byte(isoMessage.FormatIso()),
 	}
 
+	// Log before enqueueing so the row exists before any response can arrive.
+	// request_time is replaced with the actual send time when the response is matched.
 	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String()); err != nil {
 		log.Println("DB Write error:", err)
 		return
@@ -385,18 +420,23 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 	select {
 	case conn.writeChannel <- req:
 	default:
-		fmt.Println("Write channel full, skipping message")
+		droppedCount.Add(1)
+		// Never sent, so it must not count as a request without a response
+		if err := conn.db.DeleteRequestLog(reference, conn.conn.RemoteAddr().String()); err != nil {
+			log.Println("DB Write error:", err)
+		}
+		return
 	}
 	if randomTemplate.OriginalMessage != "" {
+		// No reference: the scheduled message has no log row of its own, so its send time is not tracked
 		req = IsoRequestResponse{
-			reference:    utils.GenerateTimestampID(),
 			stressTestId: stressTest.ID,
 			rawRequest:   []byte(scheduledMessage.FormatIso()),
 		}
 		select {
 		case conn.writeChannel <- req:
 		default:
-			fmt.Println("Write channel full, skipping message")
+			droppedCount.Add(1)
 		}
 	}
 }
@@ -457,7 +497,7 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	isoConn := &IsoConnection{
 		conn:         conn,
 		readChannel:  make(chan IsoRequestResponse, 16),
-		writeChannel: make(chan IsoRequestResponse, 16),
+		writeChannel: make(chan IsoRequestResponse, writeChannelSize),
 		closeChannel: make(chan struct{}),
 		db:           server.db,
 	}

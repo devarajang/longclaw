@@ -31,30 +31,27 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 	}, nil
 }
 
-func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string) error {
-	// First, get the request_time
-	var requestTime time.Time
-	err := s.db.QueryRow(
-		"SELECT request_time FROM request_response_log WHERE reference = ? AND connection_id = ?",
-		reference, connectionID,
-	).Scan(&requestTime)
-	if err != nil {
-		return fmt.Errorf("failed to get request time: %v", err)
-	}
-
-	// Calculate time taken in nanoseconds
-	responseTime := time.Now()
+// UpdateResponseTime records when the request was written to the socket and when its response was read.
+// Both times are captured by the caller so database delays are not counted as latency.
+func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string, requestTime, responseTime time.Time) error {
 	timeTaken := responseTime.Sub(requestTime).Milliseconds()
 
-	// Update with calculated value
-	_, err = s.db.Exec(
-		"UPDATE request_response_log SET response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
-		responseTime, timeTaken, reference, connectionID,
+	result, err := s.db.Exec(
+		"UPDATE request_response_log SET request_time = ?, response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
+		requestTime, responseTime, timeTaken, reference, connectionID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update response log: %v", err)
 	}
+	if n, err := result.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("no request logged for reference %s on %s", reference, connectionID)
+	}
+	return nil
+}
 
+// Delete a request log entry for a message that was never sent
+func (s *StressTestDB) DeleteRequestLog(reference string, connectionID string) error {
+	_, err := s.db.Exec("DELETE FROM request_response_log WHERE reference = ? AND connection_id = ?", reference, connectionID)
 	return err
 }
 
