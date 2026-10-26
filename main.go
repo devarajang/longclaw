@@ -75,10 +75,11 @@ func main() {
 
 	go str.HandleChannelEvents()
 
-	go func() {
-		log.Println("Loading test cards")
-		utils.LoadCards(cfg.Data.CardsPath)
-	}()
+	// Load cards before serving so a stress test can never start with an empty card list
+	log.Println("Loading test cards")
+	if err := utils.LoadCards(cfg.Data.CardsPath); err != nil {
+		log.Fatal("Failed to load test cards:", err)
+	}
 
 	var app *handlers.App = &handlers.App{
 		Config: &handlers.AppConfig{

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	mathrand "math/rand"
 	"os"
@@ -32,8 +33,14 @@ func LoadCards(dataPath string) error {
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
-	decoder.Decode(&CardsList)
-	fmt.Println(CardsList)
+	if err := decoder.Decode(&CardsList); err != nil {
+		return err
+	}
+	if len(CardsList) == 0 {
+		return fmt.Errorf("no cards found in %s", filePath)
+	}
+	// Log only the count: the card list holds PANs and CVVs
+	log.Printf("Loaded %d test cards", len(CardsList))
 	return nil
 }
 
