@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -26,6 +27,12 @@ func main() {
 	certPath := getEnv("LONGCLAW_CERT_PATH", "certs/")
 	serverAddr := getEnv("LONGCLAW_ISO_ADDR", "127.0.0.1:8443")
 	fmt.Println("Running a TLS client", certPath, serverAddr)
+
+	// Simulated issuer think time before each reply
+	replyDelayMs, err := strconv.Atoi(getEnv("LONGCLAW_CLIENT_DELAY_MS", "3000"))
+	if err != nil {
+		log.Fatalf("invalid LONGCLAW_CLIENT_DELAY_MS: %v", err)
+	}
 
 	caBytes, err := os.ReadFile(certPath + "server/ca.crt")
 
@@ -75,13 +82,20 @@ func main() {
 		}
 		copy(message, respMTI)
 
-		time.Sleep(time.Millisecond * time.Duration(3000))
-		buf := make([]byte, 2)
-		binary.BigEndian.PutUint16(buf, uint16(n))
-		buf = append(buf, message[0:n]...)
-		log.Println("Writing data to ", conn.RemoteAddr())
-		conn.Write(buf)
-		log.Println("Wrote data ", string(message[0:n]))
+		// Reply in the background so the delay does not hold up reading the next message.
+		// tls.Conn serialises concurrent Writes, and each frame goes out in a single Write.
+		go func() {
+			time.Sleep(time.Millisecond * time.Duration(replyDelayMs))
+			buf := make([]byte, 2)
+			binary.BigEndian.PutUint16(buf, uint16(n))
+			buf = append(buf, message[0:n]...)
+			log.Println("Writing data to ", conn.RemoteAddr())
+			if _, err := conn.Write(buf); err != nil {
+				log.Printf("Write error: %v", err)
+				return
+			}
+			log.Println("Wrote data ", string(message[0:n]))
+		}()
 	}
 
 }
