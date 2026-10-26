@@ -28,7 +28,9 @@ var requestMTISet = map[string]bool{
 
 var responseMTISet = map[string]bool{
 	"0110": true, "0111": true,
+	"0130": true, "0131": true, // advice responses (follow-up 0120)
 	"0210": true, "0211": true,
+	"0230": true, "0231": true, // advice responses (follow-up 0220)
 	"0430": true, "0431": true,
 	"0810": true,
 }
