@@ -85,16 +85,9 @@ func (c *IsoConnection) HandleRead() {
 
 		switch {
 		case isRequestMTI(mti):
-			resp, err := buildResponse(isoMessage)
-			if err != nil {
-				log.Printf("Response build error: %v", err)
-				continue
-			}
-			select {
-			case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
-			default:
-				droppedCount.Add(1)
-			}
+			// buildResponse sleeps to simulate a slow issuer for some PANs; respond from a goroutine
+			// so that delay does not hold up reading the next message on this connection
+			go c.respond(isoMessage)
 		case isResponseMTI(mti):
 			reference := isoMessage.GetField(36)
 			sentAt, ok := c.sentTimes.LoadAndDelete(reference)
@@ -109,6 +102,21 @@ func (c *IsoConnection) HandleRead() {
 		}
 	}
 }
+
+// respond builds the issuer response to an incoming request and queues it for writing
+func (c *IsoConnection) respond(request *iso.Iso8583Message) {
+	resp, err := buildResponse(request)
+	if err != nil {
+		log.Printf("Response build error: %v", err)
+		return
+	}
+	select {
+	case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
+	default:
+		droppedCount.Add(1)
+	}
+}
+
 func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	// Read 2-byte length prefix
 	lengthBytes := make([]byte, 2)
