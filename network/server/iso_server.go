@@ -23,7 +23,7 @@ import (
 	"github.com/devarajang/longclaw/utils"
 )
 
-var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+var errTestInProgress = errors.New("connection test is already in progress")
 
 type IsoRequestResponse struct {
 	requestTime  time.Time
@@ -41,9 +41,12 @@ type IsoConnection struct {
 	closeChannel chan struct{}
 	db           *database.StressTestDB
 	connTestMap  sync.Map
+	closeOnce    sync.Once
+	onClose      func() // removes the connection from the server's map
 }
 
 func (c *IsoConnection) HandleRead() {
+	defer c.Close()
 	for {
 		message, err := readLengthPrefixedMessage(c.conn)
 		if err != nil {
@@ -110,9 +113,15 @@ func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	return message, nil
 }
 
+// Close shuts the connection down once; the read loop, write loop and TestConnection may all call it
 func (sc *IsoConnection) Close() {
-	close(sc.closeChannel)
-	sc.conn.Close()
+	sc.closeOnce.Do(func() {
+		close(sc.closeChannel)
+		sc.conn.Close()
+		if sc.onClose != nil {
+			sc.onClose()
+		}
+	})
 }
 
 func (c *IsoConnection) TestConnection() (bool, error) {
@@ -125,7 +134,7 @@ func (c *IsoConnection) TestConnection() (bool, error) {
 		return isEmpty
 	})
 	if !isEmpty {
-		return false, errors.New("connection test is already in progress")
+		return false, errTestInProgress
 	}
 	formatString := time.Now().Format("0102150405")
 	isoMessage := "080082200000000000000400000000000000" + formatString + "026612361"
@@ -166,6 +175,7 @@ func (c *IsoConnection) HandleChannelEvents() {
 			_, err := c.conn.Write(buf)
 			if err != nil {
 				log.Println("Socket write error:", err)
+				c.Close()
 				return
 			}
 			sentCount.Add(1)
@@ -188,6 +198,16 @@ func (server *IsoServer) getConn(clientId string) (*IsoConnection, bool) {
 	defer server.connMu.RUnlock()
 	conn, ok := server.connMap[clientId]
 	return conn, ok
+}
+
+// removeConn deletes clientId from connMap if it still maps to conn
+func (server *IsoServer) removeConn(clientId string, conn *IsoConnection) {
+	server.connMu.Lock()
+	defer server.connMu.Unlock()
+	if server.connMap[clientId] == conn {
+		delete(server.connMap, clientId)
+		log.Println("Client disconnected:", clientId)
+	}
 }
 
 // connections returns a snapshot of the connected clients, safe to use without holding the lock
@@ -249,11 +269,10 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 
 	if testStatus == true {
 		log.Printf("Client socket validation:  %v,  %s", testStatus, err)
-	} else {
-		server.connMu.Lock()
-		delete(server.connMap, clientId)
-		server.connMu.Unlock()
-		log.Println("Removed client after failed connection test:", clientId)
+	} else if !errors.Is(err, errTestInProgress) {
+		// Close also removes the client from connMap via onClose
+		conn.Close()
+		log.Println("Closed client after failed connection test:", clientId)
 	}
 	return fmt.Sprintf("Client socket validation:  %v,  %s", testStatus, err), nil
 }
@@ -395,7 +414,13 @@ func (server *IsoServer) GetConnectedClients() []string {
 
 func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 
-	//defer conn.Close()
+	// Close the socket on every early return; once registered, IsoConnection.Close owns it
+	registered := false
+	defer func() {
+		if !registered {
+			conn.Close()
+		}
+	}()
 	remoteAddr := conn.RemoteAddr()
 
 	tlsConn, ok := conn.(*tls.Conn)
@@ -412,12 +437,12 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	}
 	log.Printf("[TLS] Handshake complete with %v", remoteAddr)
 
-	// Simulate random 8 percent disconnect after client cert is received
-	roll := rng.Intn(100)
-	log.Printf("[TLS] Random roll: %d (0=disconnect, 1=allow) for %v", roll, remoteAddr)
-	if roll <= 8 {
+	// Simulate random 8 percent disconnect after client cert is received.
+	// Top-level rand functions are safe for concurrent use, unlike a shared *rand.Rand.
+	roll := rand.Intn(100)
+	log.Printf("[TLS] Random roll: %d (0-7=disconnect, 8-99=allow) for %v", roll, remoteAddr)
+	if roll < 8 {
 		log.Printf("[TLS] Simulated disconnect after handshake from %v", remoteAddr)
-		conn.Close()
 		return
 	}
 
@@ -434,9 +459,12 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 		closeChannel: make(chan struct{}),
 		db:           server.db,
 	}
+	clientId := remoteAddr.String()
+	isoConn.onClose = func() { server.removeConn(clientId, isoConn) }
 	server.connMu.Lock()
-	server.connMap[remoteAddr.String()] = isoConn
+	server.connMap[clientId] = isoConn
 	server.connMu.Unlock()
+	registered = true
 
 	go isoConn.HandleRead()
 	go isoConn.HandleChannelEvents()
