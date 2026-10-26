@@ -421,15 +421,13 @@ func (server *IsoServer) StartListen() error {
 	// First create cert from certfile and keyfile
 	cert, err := tls.LoadX509KeyPair(server.config.TLS.ServerCertPath, server.config.TLS.ServerKeyPath)
 	if err != nil {
-		log.Fatalf("failed to load server cert/key: %v", err)
-		return err
+		return fmt.Errorf("failed to load server cert/key: %w", err)
 	}
 
 	caCert, err := os.ReadFile(server.config.TLS.CAPath)
 
 	if err != nil {
-		log.Fatalf("failed to load ca cert: %v", err)
-		return err
+		return fmt.Errorf("failed to load ca cert: %w", err)
 	}
 
 	caPool := x509.NewCertPool()
@@ -443,7 +441,7 @@ func (server *IsoServer) StartListen() error {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	listener, err := tls.Listen("tcp", ":8443", tlsConfig)
+	listener, err := tls.Listen("tcp", server.config.Server.ISOPort, tlsConfig)
 
 	if err != nil {
 		return err
@@ -468,5 +466,5 @@ func NewIsoServer(db *database.StressTestDB, cfg *config.Config) (*IsoServer, er
 		db:      db,
 	}
 
-	return &server, errors.New("Unable to create the server")
+	return &server, nil
 }
