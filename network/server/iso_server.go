@@ -304,6 +304,10 @@ const stressWorkers = 64
 // RunStress sends RequestPerSecond messages per second to every connected client for TestTimeSecs.
 // The number due is worked out from elapsed time, so late or dropped ticks are made up on the next one.
 func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
+	if stressTest.TestTimeSecs <= 0 || stressTest.RequestPerSecond <= 0 {
+		log.Printf("Skipping stress test %d: test_time_secs and request_per_second must be greater than 0", stressTest.ID)
+		return
+	}
 	// 1. Create a context with timeout based on stress test duration
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(stressTest.TestTimeSecs)*time.Second)
 	defer cancel() // Ensure context is cancelled when function exits
