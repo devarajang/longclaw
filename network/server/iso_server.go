@@ -179,7 +179,26 @@ type IsoServer struct {
 	listener net.Listener
 	config   *config.Config
 	connMap  map[string]*IsoConnection
+	connMu   sync.RWMutex // guards connMap: written by connection goroutines, read by HTTP handlers and RunStress
 	db       *database.StressTestDB
+}
+
+func (server *IsoServer) getConn(clientId string) (*IsoConnection, bool) {
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	conn, ok := server.connMap[clientId]
+	return conn, ok
+}
+
+// connections returns a snapshot of the connected clients, safe to use without holding the lock
+func (server *IsoServer) connections() []*IsoConnection {
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	conns := make([]*IsoConnection, 0, len(server.connMap))
+	for _, conn := range server.connMap {
+		conns = append(conns, conn)
+	}
+	return conns
 }
 
 func validateClient(connState tls.ConnectionState, expectedCN string) error {
@@ -205,7 +224,7 @@ func validateClient(connState tls.ConnectionState, expectedCN string) error {
 }
 
 func (server *IsoServer) SendMessage(clientId string, rawMsg string) error {
-	conn, ok := server.connMap[clientId]
+	conn, ok := server.getConn(clientId)
 	if !ok {
 		return errors.New("client not found: " + clientId)
 	}
@@ -221,7 +240,7 @@ func (server *IsoServer) SendMessage(clientId string, rawMsg string) error {
 }
 
 func (server *IsoServer) TestConnection(clientId string) (string, error) {
-	conn, ok := server.connMap[clientId]
+	conn, ok := server.getConn(clientId)
 
 	if ok == false {
 		return "", errors.New("Client is not in the connected list")
@@ -231,8 +250,10 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 	if testStatus == true {
 		log.Printf("Client socket validation:  %v,  %s", testStatus, err)
 	} else {
+		server.connMu.Lock()
 		delete(server.connMap, clientId)
-		log.Println(server.connMap)
+		server.connMu.Unlock()
+		log.Println("Removed client after failed connection test:", clientId)
 	}
 	return fmt.Sprintf("Client socket validation:  %v,  %s", testStatus, err), nil
 }
@@ -255,12 +276,7 @@ func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.Is
 			return
 		case <-ticker.C:
 			// Send to all connections
-			for _, connName := range server.GetConnectedClients() {
-				conn, ok := server.connMap[connName]
-				if !ok {
-					continue
-				}
-
+			for _, conn := range server.connections() {
 				go sendSingleMessage(conn, stressTest, isoSpec)
 			}
 			count++
@@ -365,9 +381,11 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 }
 
 func (server *IsoServer) GetConnectedClients() []string {
-	keys := make([]string, len(server.connMap))
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	keys := make([]string, 0, len(server.connMap))
 
-	for key, _ := range server.connMap {
+	for key := range server.connMap {
 		if len(key) > 0 {
 			keys = append(keys, key)
 		}
@@ -416,7 +434,9 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 		closeChannel: make(chan struct{}),
 		db:           server.db,
 	}
+	server.connMu.Lock()
 	server.connMap[remoteAddr.String()] = isoConn
+	server.connMu.Unlock()
 
 	go isoConn.HandleRead()
 	go isoConn.HandleChannelEvents()
