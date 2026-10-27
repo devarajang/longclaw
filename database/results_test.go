@@ -43,7 +43,9 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 			total_requests INTEGER DEFAULT 0, test_time_secs INTEGER NOT NULL, request_per_second INTEGER NOT NULL)`,
 		`CREATE TABLE request_response_log (id INTEGER PRIMARY KEY AUTOINCREMENT, request_time DATETIME NOT NULL, response_time DATETIME,
 			time_taken INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, stresstest_id INTEGER NOT NULL, reference TEXT NOT NULL,
-			connection_id TEXT NOT NULL)`,
+			connection_id TEXT NOT NULL, mti TEXT)`,
+		`CREATE TABLE scheduled_message (id INTEGER PRIMARY KEY AUTOINCREMENT, reference TEXT NOT NULL, message TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP, connection_id TEXT NOT NULL, stresstest_id INTEGER NOT NULL, sent_at DATETIME DEFAULT NULL)`,
 	} {
 		if _, err := db.Exec(ddl); err != nil {
 			t.Fatal(err)
@@ -53,6 +55,8 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 }
 
 // One test with 10 answered requests (10..100ms) and 2 unanswered, plus another test that must be ignored.
+// Originals are 0100 (8 answered at 10..80ms, 2 unanswered); follow-ups are 0420 (2 answered at 90 and 100ms).
+// Of 3 scheduled follow-ups, 1 was never sent.
 func seedResults(t *testing.T, s *StressTestDB) int {
 	t.Helper()
 	test, err := s.CreateStressTest("results", 4, 3)
@@ -61,12 +65,20 @@ func seedResults(t *testing.T, s *StressTestDB) int {
 	}
 	now := time.Now()
 	for i := 1; i <= 10; i++ {
-		s.db.Exec("INSERT INTO request_response_log (stresstest_id, request_time, response_time, time_taken, reference, connection_id) VALUES (?, ?, ?, ?, ?, 'c1')",
-			test.ID, now, now, i*10, i)
+		mti := "0100"
+		if i > 8 {
+			mti = "0420"
+		}
+		s.db.Exec("INSERT INTO request_response_log (stresstest_id, request_time, response_time, time_taken, reference, connection_id, mti) VALUES (?, ?, ?, ?, ?, 'c1', ?)",
+			test.ID, now, now, i*10, i, mti)
 	}
 	for i := 11; i <= 12; i++ {
-		s.db.Exec("INSERT INTO request_response_log (stresstest_id, request_time, reference, connection_id) VALUES (?, ?, ?, 'c1')", test.ID, now, i)
+		s.db.Exec("INSERT INTO request_response_log (stresstest_id, request_time, reference, connection_id, mti) VALUES (?, ?, ?, 'c1', '0100')", test.ID, now, i)
 	}
+	for i, sentAt := range []any{now, now, nil} {
+		s.db.Exec("INSERT INTO scheduled_message (stresstest_id, reference, connection_id, message, sent_at) VALUES (?, ?, 'c1', 'msg', ?)", test.ID, i+1, sentAt)
+	}
+	s.db.Exec("INSERT INTO scheduled_message (stresstest_id, reference, connection_id, message) VALUES (?, 'other', 'c1', 'msg')", test.ID+1)
 	s.db.Exec("INSERT INTO request_response_log (stresstest_id, request_time, time_taken, reference, connection_id) VALUES (?, ?, 9999, 'other', 'c1')", test.ID+1, now)
 	return test.ID
 }
@@ -96,6 +108,20 @@ func TestGetStressTestResults(t *testing.T) {
 		if v[0] != v[1] {
 			t.Errorf("latency %s = %v, want %v", name, v[0], v[1])
 		}
+	}
+
+	if r.FollowUpsNotSent != 1 {
+		t.Errorf("follow_ups_not_sent = %d, want 1", r.FollowUpsNotSent)
+	}
+	originals, followUps := r.ByMTI["0100"], r.ByMTI["0420"]
+	if len(r.ByMTI) != 2 || originals.Logged != 10 || originals.Answered != 8 || originals.Unanswered != 2 || followUps.Logged != 2 || followUps.Answered != 2 {
+		t.Errorf("by_mti counts = %+v, want 0100 10/8/2 and 0420 2/2/0", r.ByMTI)
+	}
+	if got := originals.LatencyMs; got.Min != 10 || got.Avg != 45 || got.P50 != 40 || got.P95 != 80 || got.Max != 80 {
+		t.Errorf("0100 latency = %+v, want min 10 avg 45 p50 40 p95 80 max 80", got)
+	}
+	if got := followUps.LatencyMs; got.Min != 90 || got.Avg != 95 || got.P50 != 90 || got.P99 != 100 || got.Max != 100 {
+		t.Errorf("0420 latency = %+v, want min 90 avg 95 p50 90 p99 100 max 100", got)
 	}
 
 	if _, err := s.GetStressTestResults(id + 100); !errors.Is(err, sql.ErrNoRows) {
@@ -142,5 +168,53 @@ func TestSetTotalRequests(t *testing.T) {
 	}
 	if test.TotalRequests != 12 {
 		t.Errorf("total_requests = %d, want 12", test.TotalRequests)
+	}
+}
+
+// An original and its follow-up can share reference and MTI (e.g. 0200 then 0200). The follow-up's response
+// must update only the follow-up's row, not overwrite the original's latency.
+func TestUpdateResponseTimeOnlyUpdatesUnansweredRow(t *testing.T) {
+	s := newResultsTestDB(t)
+	start := time.Now()
+	s.AddRequestLog(1, start, "ref", "c1", "0200")
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(10*time.Millisecond))
+	s.AddRequestLog(1, start, "ref", "c1", "0200") // follow-up, sent after the original was answered
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(70*time.Millisecond))
+	s.writer.Close()
+
+	rows, err := s.db.Query("SELECT time_taken FROM request_response_log ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []int
+	for rows.Next() {
+		var ms int
+		rows.Scan(&ms)
+		got = append(got, ms)
+	}
+	if len(got) != 2 || got[0] != 10 || got[1] != 70 {
+		t.Errorf("time_taken per row = %v, want [10 70]", got)
+	}
+}
+
+func TestAddColumnIfMissing(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// A request_response_log created before the mti column existed
+	db.Exec("CREATE TABLE request_response_log (id INTEGER PRIMARY KEY, reference TEXT)")
+	db.Exec("INSERT INTO request_response_log (reference) VALUES ('old')")
+
+	for i := 0; i < 2; i++ { // the second call must be a no-op
+		if err := addColumnIfMissing(db, "request_response_log", "mti", "TEXT"); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	var mti sql.NullString
+	if err := db.QueryRow("SELECT mti FROM request_response_log WHERE reference = 'old'").Scan(&mti); err != nil || mti.Valid {
+		t.Errorf("existing row mti = %v (err %v), want NULL", mti, err)
 	}
 }

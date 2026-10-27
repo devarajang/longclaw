@@ -31,7 +31,27 @@ type IsoRequestResponse struct {
 	rawRequest   []byte
 	rawResponse  []byte
 	reference    string
+	mti          string // request MTI; with reference it identifies the response to wait for
 	stressTestId int
+}
+
+// sentRequest is what sentTimes holds for a request awaiting its response
+type sentRequest struct {
+	mti    string
+	sentAt time.Time
+}
+
+// pendingFollowUp is a reversal or advice to send once the original request's response arrives
+type pendingFollowUp struct {
+	mti          string
+	rawMessage   string
+	stressTestId int
+}
+
+// matchKey pairs a request with its response: same reference (field 37) and same MTI with the function
+// digit made even, so 0100 and 0110 match but 0100 and 0420 carrying the same reference do not.
+func matchKey(mti, reference string) string {
+	return mti[:2] + string(mti[2]&^1) + mti[3:4] + "|" + reference
 }
 
 type IsoConnection struct {
@@ -43,7 +63,8 @@ type IsoConnection struct {
 	connTestMap  sync.Map
 	closeOnce    sync.Once
 	onClose      func()   // removes the connection from the server's map
-	sentTimes    sync.Map // reference -> time.Time the request was written to the socket
+	sentTimes    sync.Map // matchKey -> sentRequest, for requests written to the socket and not yet answered
+	followUps    sync.Map // reference -> *pendingFollowUp, sent when the original's response arrives
 }
 
 // writeChannelSize is how many messages a connection can queue before new ones are dropped
@@ -90,15 +111,42 @@ func (c *IsoConnection) HandleRead() {
 			go c.respond(isoMessage)
 		case isResponseMTI(mti):
 			reference := isoMessage.GetField(36)
-			sentAt, ok := c.sentTimes.LoadAndDelete(reference)
+			sent, ok := c.sentTimes.LoadAndDelete(matchKey(mti, reference))
 			if !ok {
 				unmatchedCount.Add(1)
 				continue
 			}
+			request := sent.(sentRequest)
 			// Only queues the write, so a slow database does not delay reading responses
-			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), sentAt.(time.Time), receivedAt); err != nil {
+			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt); err != nil {
 				log.Println("Response time update error:", err)
 			}
+			// The original is answered, so its reversal or advice can go now
+			if followUp, ok := c.followUps.LoadAndDelete(reference); ok {
+				c.sendFollowUp(reference, followUp.(*pendingFollowUp))
+			}
+		}
+	}
+}
+
+// sendFollowUp logs and queues a reversal or advice whose original request has been answered
+func (c *IsoConnection) sendFollowUp(reference string, followUp *pendingFollowUp) {
+	connectionID := c.conn.RemoteAddr().String()
+	now := time.Now()
+	// Log before enqueueing so the row exists before the follow-up's response can arrive
+	if err := c.db.AddRequestLog(followUp.stressTestId, now, reference, connectionID, followUp.mti); err != nil {
+		log.Println("DB Write error:", err)
+		return
+	}
+	select {
+	case c.writeChannel <- IsoRequestResponse{reference: reference, mti: followUp.mti, stressTestId: followUp.stressTestId, rawRequest: []byte(followUp.rawMessage)}:
+		if err := c.db.MarkScheduledMessageSent(reference, connectionID, now); err != nil {
+			log.Println("DB Write error:", err)
+		}
+	default:
+		droppedCount.Add(1)
+		if err := c.db.DeleteRequestLog(reference, connectionID, followUp.mti); err != nil {
+			log.Println("DB Write error:", err)
 		}
 	}
 }
@@ -198,7 +246,7 @@ func (c *IsoConnection) HandleChannelEvents() {
 			if msg.reference != "" {
 				// Stamp just before the write so latency excludes time queued on our side.
 				// Stored before writing so a fast response can never arrive ahead of it.
-				c.sentTimes.Store(msg.reference, time.Now())
+				c.sentTimes.Store(matchKey(msg.mti, msg.reference), sentRequest{mti: msg.mti, sentAt: time.Now()})
 			}
 			_, err := c.conn.Write(buf)
 			if err != nil {
@@ -435,20 +483,30 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		log.Println("Template parse error:", err)
 		return
 	}
+	connectionID := conn.conn.RemoteAddr().String()
 	if scheduledMessage != nil {
-		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
+		// Recorded now with sent_at empty; HandleRead sends it once the original is answered.
+		// Registered before the original is queued so its response cannot arrive first.
+		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, connectionID, scheduledMessage.FormatIso())
+		conn.followUps.Store(reference, &pendingFollowUp{
+			mti:          scheduledMessage.GetMTI(),
+			rawMessage:   scheduledMessage.FormatIso(),
+			stressTestId: stressTest.ID,
+		})
 	}
 
 	req := IsoRequestResponse{
 		reference:    reference,
+		mti:          isoMessage.GetMTI(),
 		stressTestId: stressTest.ID,
 		rawRequest:   []byte(isoMessage.FormatIso()),
 	}
 
 	// Log before enqueueing so the row exists before any response can arrive.
 	// request_time is replaced with the actual send time when the response is matched.
-	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String()); err != nil {
+	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, connectionID, req.mti); err != nil {
 		log.Println("DB Write error:", err)
+		conn.followUps.Delete(reference)
 		return
 	}
 
@@ -456,22 +514,10 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 	case conn.writeChannel <- req:
 	default:
 		droppedCount.Add(1)
-		// Never sent, so it must not count as a request without a response
-		if err := conn.db.DeleteRequestLog(reference, conn.conn.RemoteAddr().String()); err != nil {
+		// Never sent, so it must not count as a request without a response, and its follow-up never goes
+		conn.followUps.Delete(reference)
+		if err := conn.db.DeleteRequestLog(reference, connectionID, req.mti); err != nil {
 			log.Println("DB Write error:", err)
-		}
-		return
-	}
-	if randomTemplate.OriginalMessage != "" {
-		// No reference: the scheduled message has no log row of its own, so its send time is not tracked
-		req = IsoRequestResponse{
-			stressTestId: stressTest.ID,
-			rawRequest:   []byte(scheduledMessage.FormatIso()),
-		}
-		select {
-		case conn.writeChannel <- req:
-		default:
-			droppedCount.Add(1)
 		}
 	}
 }
