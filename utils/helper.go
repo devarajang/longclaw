@@ -1,14 +1,13 @@
 package utils
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/big"
 	mathrand "math/rand"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/devarajang/longclaw/dtos"
@@ -49,19 +48,19 @@ func GetRandomCard() dtos.Card {
 	return CardsList[randNum]
 }
 
+// referenceCounter backs GenerateTimestampID. It is seeded from the clock at 100 IDs per millisecond,
+// so references never repeat within a run and do not repeat after a restart unless the previous run
+// averaged more than 100k IDs per second. The 12 digits wrap about every 115 days.
+var referenceCounter atomic.Int64
+
+func init() {
+	referenceCounter.Store(time.Now().UnixMilli() * 100)
+}
+
+// GenerateTimestampID returns a unique 12-digit reference (field 37, Retrieval Reference Number).
+// A random suffix on the millisecond collided under load: 0.5% of IDs at 10 per millisecond.
 func GenerateTimestampID() string {
-	// Get current timestamp in milliseconds
-	timestamp := time.Now().UnixNano() / 1e6
-
-	// Generate random 3-digit suffix
-	randNum, _ := rand.Int(rand.Reader, big.NewInt(900))
-	randNum = randNum.Add(randNum, big.NewInt(100))
-
-	// Combine timestamp (last 9 digits) with random suffix
-	timestampStr := fmt.Sprintf("%09d", timestamp%1000000000)
-	randomStr := randNum.String()
-
-	return timestampStr + randomStr
+	return fmt.Sprintf("%012d", referenceCounter.Add(1)%1_000_000_000_000)
 }
 
 func Substr(input string, start int, length int) string {
