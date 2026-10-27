@@ -51,8 +51,6 @@ func (c *IsoConnection) HandleRead() {
 			return
 		}
 		n := len(message)
-		log.Printf("Received %d bytes: %s", n, string(message))
-
 		msgBody := string(message[0:n])
 		mti := msgBody[0:4]
 
@@ -156,9 +154,6 @@ func (c *IsoConnection) HandleChannelEvents() {
 	for {
 		select {
 		case msg := <-c.writeChannel:
-
-			log.Println("Writing data to ", msg.reference, c.conn.RemoteAddr())
-
 			buf := make([]byte, 2)
 			binary.BigEndian.PutUint16(buf, uint16(len(msg.rawRequest)))
 			buf = append(buf, msg.rawRequest...)
@@ -168,6 +163,7 @@ func (c *IsoConnection) HandleChannelEvents() {
 				log.Println("Socket write error:", err)
 				return
 			}
+			sentCount.Add(1)
 		case <-c.closeChannel:
 			return
 		}
@@ -305,8 +301,6 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 					sb.WriteString(card.CVV2)
 					sb.WriteString("M")
 				}
-				fmt.Println(de123)
-				fmt.Println(sb.String())
 				isoMessage.SetField(122, sb.String())
 			}
 		}
@@ -448,6 +442,7 @@ func (server *IsoServer) StartListen() error {
 	}
 	server.listener = listener
 	log.Println("Started TLS socket server", listener.Addr())
+	go reportSentPerMinute()
 	for {
 		conn, err := server.listener.Accept()
 		if err != nil {
