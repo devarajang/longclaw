@@ -59,6 +59,12 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 		return nil, err
 	}
 
+	// UpdateResponseTime looks rows up by reference and connection; without this index every response scans the table
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_response_log_reference ON request_response_log (reference, connection_id)`)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create scheduled_message table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS scheduled_message (
