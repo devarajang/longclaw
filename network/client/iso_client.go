@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+// responseMTI returns the response MTI for a request or advice message (0100 -> 0110, 0420 -> 0430).
+// The third MTI digit is the message function: even for requests/advices, odd for their responses.
+func responseMTI(message string) (string, bool) {
+	if len(message) < 4 || message[2] < '0' || message[2] > '9' || (message[2]-'0')%2 != 0 {
+		return "", false
+	}
+	return message[:2] + string(message[2]+1) + message[3:4], true
+}
+
 func main() {
 
 	certPath := getEnv("LONGCLAW_CERT_PATH", "certs/")
@@ -57,6 +66,14 @@ func main() {
 			return
 		}
 		log.Printf("Received %d bytes: %s", n, string(message))
+
+		// Reply as an issuer would: same message with the response MTI, so the server can match it by field 37
+		respMTI, ok := responseMTI(string(message))
+		if !ok {
+			log.Println("Not a request message, not replying")
+			continue
+		}
+		copy(message, respMTI)
 
 		time.Sleep(time.Millisecond * time.Duration(3000))
 		buf := make([]byte, 2)
