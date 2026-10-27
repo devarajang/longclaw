@@ -9,7 +9,7 @@ import (
 
 type IsoMsgTemplate struct {
 	Message         string `json:"message"`
-	OriginalMessage string `jaon:"original_message"`
+	OriginalMessage string `json:"original_message"`
 }
 
 var messageList []IsoMsgTemplate
