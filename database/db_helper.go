@@ -36,10 +36,15 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			total_requests INTEGER DEFAULT 0,
 			test_time_secs INTEGER NOT NULL,
-			request_per_second INTEGER NOT NULL
+			request_per_second INTEGER NOT NULL,
+			node_test_mode TEXT NOT NULL DEFAULT 'advertised'
 		)
 	`)
 	if err != nil {
+		return nil, err
+	}
+	// Databases created before node_test_mode existed; their tests ran in advertised mode
+	if err := addColumnIfMissing(db, "stress_test", "node_test_mode", "TEXT NOT NULL DEFAULT 'advertised'"); err != nil {
 		return nil, err
 	}
 
@@ -63,6 +68,10 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 	}
 	// Databases created before the mti column existed
 	if err := addColumnIfMissing(db, "request_response_log", "mti", "TEXT"); err != nil {
+		return nil, err
+	}
+
+	if err := addRefundColumns(db); err != nil {
 		return nil, err
 	}
 
@@ -97,6 +106,35 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 	}
 
 	return &StressTestDB{db: db, writer: newBatchWriter(db)}, nil
+}
+
+// refundColumns are the columns refund tests need: the test type, and enough of each request and
+// response to find approved sales and replay them as refunds
+var refundColumns = []struct{ table, column, columnType string }{
+	{"stress_test", "test_type", "TEXT NOT NULL DEFAULT 'sale'"},
+	{"stress_test", "source_test_id", "INTEGER"},
+	{"request_response_log", "processing_code", "TEXT"},
+	{"request_response_log", "pan", "TEXT"},
+	{"request_response_log", "amount", "TEXT"},
+	{"request_response_log", "currency", "TEXT"},
+	{"request_response_log", "request_message", "TEXT"},
+	{"request_response_log", "response_code", "TEXT"},
+	{"request_response_log", "auth_id", "TEXT"},
+	{"request_response_log", "original_log_id", "INTEGER"},
+}
+
+// addRefundColumns adds refundColumns to new and existing databases, plus the indexes GetRefundCandidates uses
+func addRefundColumns(db *sql.DB) error {
+	for _, c := range refundColumns {
+		if err := addColumnIfMissing(db, c.table, c.column, c.columnType); err != nil {
+			return fmt.Errorf("add column %s.%s: %v", c.table, c.column, err)
+		}
+	}
+	_, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_request_response_log_stresstest ON request_response_log (stresstest_id);
+		CREATE INDEX IF NOT EXISTS idx_request_response_log_original ON request_response_log (original_log_id);
+	`)
+	return err
 }
 
 // addColumnIfMissing adds a column to an existing table; CREATE TABLE IF NOT EXISTS does not change

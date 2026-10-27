@@ -13,4 +13,21 @@ type RequestLog struct {
 	TimeTaken    int       `json:"time_taken"` // in milliseconds
 	CreatedAt    time.Time `json:"created_at"`
 	StressTestID int       `json:"stresstest_id"`
+
+	// Request details, so a later refund test can find and replay approved sales
+	ProcessingCode string `json:"processing_code"`
+	PAN            string `json:"pan"`
+	Amount         string `json:"amount"`
+	Currency       string `json:"currency"`
+	RequestMessage string `json:"-"`
+	ResponseCode   string `json:"response_code"`
+	AuthID         string `json:"auth_id"`
+	OriginalLogID  int    `json:"original_log_id"` // refund rows: id of the sale being refunded
+}
+
+// RefundCandidate is an approved sale that has not been reversed or refunded yet
+type RefundCandidate struct {
+	LogID          int
+	Reference      string
+	RequestMessage string
 }

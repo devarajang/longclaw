@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/devarajang/longclaw/internal/domain"
 )
 
 func TestPercentile(t *testing.T) {
@@ -40,7 +42,8 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 	t.Cleanup(func() { db.Close() })
 	for _, ddl := range []string{
 		`CREATE TABLE stress_test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			total_requests INTEGER DEFAULT 0, test_time_secs INTEGER NOT NULL, request_per_second INTEGER NOT NULL)`,
+			total_requests INTEGER DEFAULT 0, test_time_secs INTEGER NOT NULL, request_per_second INTEGER NOT NULL,
+			node_test_mode TEXT NOT NULL DEFAULT 'advertised')`,
 		`CREATE TABLE request_response_log (id INTEGER PRIMARY KEY AUTOINCREMENT, request_time DATETIME NOT NULL, response_time DATETIME,
 			time_taken INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, stresstest_id INTEGER NOT NULL, reference TEXT NOT NULL,
 			connection_id TEXT NOT NULL, mti TEXT)`,
@@ -51,6 +54,9 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 			t.Fatal(err)
 		}
 	}
+	if err := addRefundColumns(db); err != nil {
+		t.Fatal(err)
+	}
 	return &StressTestDB{db: db, writer: newBatchWriter(db)}
 }
 
@@ -59,7 +65,7 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 // Of 3 scheduled follow-ups, 1 was never sent.
 func seedResults(t *testing.T, s *StressTestDB) int {
 	t.Helper()
-	test, err := s.CreateStressTest("results", 4, 3)
+	test, err := s.CreateStressTest("results", 4, 3, "advertised", "sale", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,10 +182,11 @@ func TestSetTotalRequests(t *testing.T) {
 func TestUpdateResponseTimeOnlyUpdatesUnansweredRow(t *testing.T) {
 	s := newResultsTestDB(t)
 	start := time.Now()
-	s.AddRequestLog(1, start, "ref", "c1", "0200")
-	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(10*time.Millisecond))
-	s.AddRequestLog(1, start, "ref", "c1", "0200") // follow-up, sent after the original was answered
-	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(70*time.Millisecond))
+	entry := domain.RequestLog{StressTestID: 1, RequestTime: start, Reference: "ref", ConnectionID: "c1", MTI: "0200"}
+	s.AddRequestLog(entry)
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(10*time.Millisecond), "00", "")
+	s.AddRequestLog(entry) // follow-up, sent after the original was answered
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(70*time.Millisecond), "00", "")
 	s.writer.Close()
 
 	rows, err := s.db.Query("SELECT time_taken FROM request_response_log ORDER BY id")
@@ -216,5 +223,51 @@ func TestAddColumnIfMissing(t *testing.T) {
 	var mti sql.NullString
 	if err := db.QueryRow("SELECT mti FROM request_response_log WHERE reference = 'old'").Scan(&mti); err != nil || mti.Valid {
 		t.Errorf("existing row mti = %v (err %v), want NULL", mti, err)
+	}
+}
+
+func TestNodeTestModeIsStored(t *testing.T) {
+	s := newResultsTestDB(t)
+	created, err := s.CreateStressTest("rr", 5, 4, "round_robin", "sale", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetStressTest(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NodeTestMode != "round_robin" || created.NodeTestMode != "round_robin" {
+		t.Errorf("node_test_mode stored %q, returned %q, want round_robin", got.NodeTestMode, created.NodeTestMode)
+	}
+}
+
+// Tests saved before node_test_mode existed ran with every node at the full rate, i.e. advertised
+func TestNodeTestModeMigrationDefaultsToAdvertised(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.Exec(`CREATE TABLE stress_test (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		total_requests INTEGER DEFAULT 0, test_time_secs INTEGER NOT NULL, request_per_second INTEGER NOT NULL)`)
+	db.Exec("INSERT INTO stress_test (name, test_time_secs, request_per_second) VALUES ('old', 5, 4)")
+
+	if err := addColumnIfMissing(db, "stress_test", "node_test_mode", "TEXT NOT NULL DEFAULT 'advertised'"); err != nil {
+		t.Fatal(err)
+	}
+	db.Exec("CREATE TABLE request_response_log (id INTEGER PRIMARY KEY, stresstest_id INTEGER, reference TEXT, mti TEXT)")
+	if err := addRefundColumns(db); err != nil {
+		t.Fatal(err)
+	}
+	s := &StressTestDB{db: db}
+	got, err := s.GetStressTest(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NodeTestMode != "advertised" {
+		t.Errorf("old test node_test_mode = %q, want advertised", got.NodeTestMode)
+	}
+	if got.TestType != "sale" || got.SourceTestID != 0 {
+		t.Errorf("old test test_type/source_test_id = %q/%d, want sale/0", got.TestType, got.SourceTestID)
 	}
 }

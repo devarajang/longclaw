@@ -44,7 +44,11 @@ func (str *StressTestRunner) HandleChannelEvents() {
 	for {
 		stressTest := <-str.StressChannel
 		fmt.Println("Received on channel", stressTest)
-		str.Server.RunStress(stressTest, str.IsoSpec)
+		if stressTest.TestType == domain.TestTypeRefund {
+			str.Server.RunRefund(stressTest, str.IsoSpec)
+		} else {
+			str.Server.RunStress(stressTest, str.IsoSpec)
+		}
 		str.Release()
 	}
 

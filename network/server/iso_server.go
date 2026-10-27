@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +119,8 @@ func (c *IsoConnection) HandleRead() {
 			}
 			request := sent.(sentRequest)
 			// Only queues the write, so a slow database does not delay reading responses
-			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt); err != nil {
+			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt,
+				isoMessage.GetField(fieldIdxResponseCode), isoMessage.GetField(fieldIdxAuthID)); err != nil {
 				log.Println("Response time update error:", err)
 			}
 			// The original is answered, so its reversal or advice can go now
@@ -134,7 +136,8 @@ func (c *IsoConnection) sendFollowUp(reference string, followUp *pendingFollowUp
 	connectionID := c.conn.RemoteAddr().String()
 	now := time.Now()
 	// Log before enqueueing so the row exists before the follow-up's response can arrive
-	if err := c.db.AddRequestLog(followUp.stressTestId, now, reference, connectionID, followUp.mti); err != nil {
+	entry := domain.RequestLog{StressTestID: followUp.stressTestId, RequestTime: now, Reference: reference, ConnectionID: connectionID, MTI: followUp.mti}
+	if err := c.db.AddRequestLog(entry); err != nil {
 		log.Println("DB Write error:", err)
 		return
 	}
@@ -286,15 +289,33 @@ func (server *IsoServer) removeConn(clientId string, conn *IsoConnection) {
 	}
 }
 
-// connections returns a snapshot of the connected clients, safe to use without holding the lock
+// connections returns a snapshot of the connected clients, safe to use without holding the lock.
+// It is sorted by client ID so round_robin visits nodes in the same order on every tick.
 func (server *IsoServer) connections() []*IsoConnection {
 	server.connMu.RLock()
 	defer server.connMu.RUnlock()
-	conns := make([]*IsoConnection, 0, len(server.connMap))
-	for _, conn := range server.connMap {
-		conns = append(conns, conn)
+	ids := make([]string, 0, len(server.connMap))
+	for id := range server.connMap {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	conns := make([]*IsoConnection, 0, len(ids))
+	for _, id := range ids {
+		conns = append(conns, server.connMap[id])
 	}
 	return conns
+}
+
+// nodeTargets returns the connections that get one step of a stress test. In advertised mode a step is
+// one message to every node, so each node receives request_per_second. In round_robin mode a step is one
+// message to the next node in turn, so request_per_second is the total across all nodes.
+func nodeTargets(mode string, conns []*IsoConnection, next *int) []*IsoConnection {
+	if mode != domain.NodeTestModeRoundRobin || len(conns) == 0 {
+		return conns
+	}
+	i := *next % len(conns)
+	*next++
+	return conns[i : i+1]
 }
 
 func validateClient(connState tls.ConnectionState, expectedCN string) error {
@@ -389,8 +410,9 @@ func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.Is
 	defer ticker.Stop()
 
 	start := time.Now()
-	rounds := 0 // rounds sent so far; each round is one message to every connection
-	count := 0  // messages queued in total
+	steps := 0 // steps sent so far; see nodeTargets for what one step sends
+	next := 0  // round_robin: position of the node that gets the next message
+	count := 0 // messages queued in total
 loop:
 	for {
 		select {
@@ -399,8 +421,8 @@ loop:
 		case now := <-ticker.C:
 			due := int(now.Sub(start).Seconds() * float64(stressTest.RequestPerSecond))
 			conns := server.connections()
-			for ; rounds < due; rounds++ {
-				for _, conn := range conns {
+			for ; steps < due; steps++ {
+				for _, conn := range nodeTargets(stressTest.NodeTestMode, conns, &next) {
 					select {
 					case jobs <- conn:
 						count++
@@ -415,9 +437,26 @@ loop:
 	workers.Wait()
 
 	elapsed := time.Since(start)
-	log.Printf("Stress test completed: %d requests sent in %v (%.0f/s)", count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
+	log.Printf("Stress test completed (%s): %d requests sent in %v (%.0f/s)", stressTest.NodeTestMode, count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
 	if err := server.db.SetTotalRequests(stressTest.ID, count); err != nil {
 		log.Println("DB Write error:", err)
+	}
+}
+
+// newRequestLog is the request_response_log row for a message about to be sent. It keeps the
+// request details a refund test needs to find and replay approved sales.
+func newRequestLog(stressTestID int, reference, connectionID string, msg *iso.Iso8583Message) domain.RequestLog {
+	return domain.RequestLog{
+		StressTestID:   stressTestID,
+		RequestTime:    time.Now(),
+		Reference:      reference,
+		ConnectionID:   connectionID,
+		MTI:            msg.GetMTI(),
+		ProcessingCode: msg.GetField(2),
+		PAN:            msg.GetField(1),
+		Amount:         msg.GetField(3),
+		Currency:       msg.GetField(48),
+		RequestMessage: msg.FormatIso(),
 	}
 }
 
@@ -495,16 +534,17 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		})
 	}
 
+	entry := newRequestLog(stressTest.ID, reference, connectionID, isoMessage)
 	req := IsoRequestResponse{
 		reference:    reference,
-		mti:          isoMessage.GetMTI(),
+		mti:          entry.MTI,
 		stressTestId: stressTest.ID,
-		rawRequest:   []byte(isoMessage.FormatIso()),
+		rawRequest:   []byte(entry.RequestMessage),
 	}
 
 	// Log before enqueueing so the row exists before any response can arrive.
 	// request_time is replaced with the actual send time when the response is matched.
-	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, connectionID, req.mti); err != nil {
+	if err := conn.db.AddRequestLog(entry); err != nil {
 		log.Println("DB Write error:", err)
 		conn.followUps.Delete(reference)
 		return

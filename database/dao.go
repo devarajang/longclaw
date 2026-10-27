@@ -10,10 +10,10 @@ import (
 )
 
 // Create a new stress test
-func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int) (*domain.StressTest, error) {
+func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int, nodeTestMode, testType string, sourceTestID int) (*domain.StressTest, error) {
 	result, err := s.db.Exec(
-		"INSERT INTO stress_test (name, test_time_secs, request_per_second) VALUES (?, ?, ?)",
-		name, testTimeSecs, requestsPerSecond,
+		"INSERT INTO stress_test (name, test_time_secs, request_per_second, node_test_mode, test_type, source_test_id) VALUES (?, ?, ?, ?, ?, ?)",
+		name, testTimeSecs, requestsPerSecond, nodeTestMode, testType, nullIfZero(sourceTestID),
 	)
 	if err != nil {
 		return nil, err
@@ -30,21 +30,25 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 		CreatedAt:        time.Now(),
 		TestTimeSecs:     testTimeSecs,
 		RequestPerSecond: requestsPerSecond,
+		NodeTestMode:     nodeTestMode,
+		TestType:         testType,
+		SourceTestID:     sourceTestID,
 	}, nil
 }
 
 // The write functions below queue to the batch writer and return once queued; write errors are logged
 // by the writer. They are applied in call order, so a request's INSERT always lands before its UPDATE.
 
-// UpdateResponseTime records when the request was written to the socket and when its response was read.
-// Both times are captured by the caller so database delays are not counted as latency.
+// UpdateResponseTime records when the request was written to the socket and when its response was read,
+// with the response code (field 39) and auth ID (field 38). Both times are captured by the caller so
+// database delays are not counted as latency.
 // A follow-up shares its original's reference, so rows are matched on mti too, and only an unanswered
 // row is updated (an original and its follow-up can have the same MTI, e.g. 0200 then 0200).
-func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string, mti string, requestTime, responseTime time.Time) error {
+func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string, mti string, requestTime, responseTime time.Time, responseCode, authID string) error {
 	timeTaken := responseTime.Sub(requestTime).Milliseconds()
 	return s.writer.enqueue(writeOp{
-		query:     "UPDATE request_response_log SET request_time = ?, response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ? AND mti = ? AND time_taken IS NULL",
-		args:      []any{requestTime, responseTime, timeTaken, reference, connectionID, mti},
+		query:     "UPDATE request_response_log SET request_time = ?, response_time = ?, time_taken = ?, response_code = ?, auth_id = ? WHERE reference = ? AND connection_id = ? AND mti = ? AND time_taken IS NULL",
+		args:      []any{requestTime, responseTime, timeTaken, responseCode, authID, reference, connectionID, mti},
 		noRowsErr: fmt.Sprintf("no unanswered %s request logged for reference %s on %s", mti, reference, connectionID),
 	})
 }
@@ -74,10 +78,13 @@ func (s *StressTestDB) AddScheduledMessage(stressTestID int, createdAt time.Time
 }
 
 // Add a request-response log entry
-func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionID string, mti string) error {
+func (s *StressTestDB) AddRequestLog(entry domain.RequestLog) error {
 	return s.writer.enqueue(writeOp{
-		query: "INSERT INTO request_response_log (stresstest_id, request_time, reference, connection_id, mti) VALUES (?, ?, ?, ?, ?)",
-		args:  []any{stressTestID, requestTime, reference, connectionID, mti},
+		query: `INSERT INTO request_response_log
+			(stresstest_id, request_time, reference, connection_id, mti, processing_code, pan, amount, currency, request_message, original_log_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		args: []any{entry.StressTestID, entry.RequestTime, entry.Reference, entry.ConnectionID, entry.MTI, entry.ProcessingCode,
+			entry.PAN, entry.Amount, entry.Currency, entry.RequestMessage, nullIfZero(entry.OriginalLogID)},
 	})
 }
 
@@ -85,9 +92,10 @@ func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, re
 func (s *StressTestDB) GetStressTest(id int) (*domain.StressTest, error) {
 	var test domain.StressTest
 	err := s.db.QueryRow(
-		"SELECT id, name, created_at, total_requests, test_time_secs, request_per_second FROM stress_test WHERE id = ?",
+		"SELECT id, name, created_at, total_requests, test_time_secs, request_per_second, node_test_mode, test_type, COALESCE(source_test_id, 0) FROM stress_test WHERE id = ?",
 		id,
-	).Scan(&test.ID, &test.Name, &test.CreatedAt, &test.TotalRequests, &test.TestTimeSecs, &test.RequestPerSecond)
+	).Scan(&test.ID, &test.Name, &test.CreatedAt, &test.TotalRequests, &test.TestTimeSecs, &test.RequestPerSecond, &test.NodeTestMode,
+		&test.TestType, &test.SourceTestID)
 
 	if err != nil {
 		return nil, err
@@ -121,6 +129,46 @@ func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]domain.RequestLog, er
 		logs = append(logs, log)
 	}
 	return logs, rows.Err()
+}
+
+// GetRefundCandidates returns approved, non-reversed purchases from a test that have no approved or
+// pending refund yet, so re-running a refund test only retries the failures.
+func (s *StressTestDB) GetRefundCandidates(sourceTestID int) ([]domain.RefundCandidate, error) {
+	rows, err := s.db.Query(`
+		SELECT o.id, o.reference, o.request_message
+		FROM request_response_log o
+		WHERE o.stresstest_id = ?
+		  AND o.mti IN ('0100', '0200')
+		  AND substr(o.processing_code, 1, 2) = '00'
+		  AND o.response_code = '00'
+		  AND NOT EXISTS (SELECT 1 FROM request_response_log rv
+		                  WHERE rv.stresstest_id = o.stresstest_id AND rv.reference = o.reference
+		                    AND rv.mti IN ('0400', '0420'))
+		  AND NOT EXISTS (SELECT 1 FROM request_response_log rf
+		                  WHERE rf.original_log_id = o.id
+		                    AND (rf.response_code = '00' OR rf.response_code IS NULL))
+		ORDER BY o.id`, sourceTestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []domain.RefundCandidate
+	for rows.Next() {
+		var c domain.RefundCandidate
+		if err := rows.Scan(&c.LogID, &c.Reference, &c.RequestMessage); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, rows.Err()
+}
+
+func nullIfZero(v int) any {
+	if v == 0 {
+		return nil
+	}
+	return v
 }
 
 // SetTotalRequests records how many requests a finished stress test sent
