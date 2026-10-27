@@ -36,10 +36,15 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			total_requests INTEGER DEFAULT 0,
 			test_time_secs INTEGER NOT NULL,
-			request_per_second INTEGER NOT NULL
+			request_per_second INTEGER NOT NULL,
+			node_test_mode TEXT NOT NULL DEFAULT 'advertised'
 		)
 	`)
 	if err != nil {
+		return nil, err
+	}
+	// Databases created before node_test_mode existed; their tests ran in advertised mode
+	if err := addColumnIfMissing(db, "stress_test", "node_test_mode", "TEXT NOT NULL DEFAULT 'advertised'"); err != nil {
 		return nil, err
 	}
 

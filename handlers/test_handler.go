@@ -23,12 +23,20 @@ func (h *Handlers) CreateTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "test_time_secs and request_per_second must be greater than 0")
 		return
 	}
+	switch stressTestReq.NodeTestMode {
+	case "":
+		stressTestReq.NodeTestMode = domain.NodeTestModeAdvertised
+	case domain.NodeTestModeAdvertised, domain.NodeTestModeRoundRobin:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "node_test_mode must be advertised or round_robin")
+		return
+	}
 	// Reserve before inserting so a request rejected because a test is running leaves no stress_test row
 	if !h.App.StressRunner.Reserve() {
 		writeError(w, http.StatusConflict, "test_in_progress", "a stress test is already running")
 		return
 	}
-	stressTest, err := h.App.DB.CreateStressTest(stressTestReq.Name, stressTestReq.TestTimeSecs, stressTestReq.RequestPerSecond)
+	stressTest, err := h.App.DB.CreateStressTest(stressTestReq.Name, stressTestReq.TestTimeSecs, stressTestReq.RequestPerSecond, stressTestReq.NodeTestMode)
 	if err != nil {
 		h.App.StressRunner.Release()
 		log.Println("Failed to create stress test:", err)

@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -286,15 +287,33 @@ func (server *IsoServer) removeConn(clientId string, conn *IsoConnection) {
 	}
 }
 
-// connections returns a snapshot of the connected clients, safe to use without holding the lock
+// connections returns a snapshot of the connected clients, safe to use without holding the lock.
+// It is sorted by client ID so round_robin visits nodes in the same order on every tick.
 func (server *IsoServer) connections() []*IsoConnection {
 	server.connMu.RLock()
 	defer server.connMu.RUnlock()
-	conns := make([]*IsoConnection, 0, len(server.connMap))
-	for _, conn := range server.connMap {
-		conns = append(conns, conn)
+	ids := make([]string, 0, len(server.connMap))
+	for id := range server.connMap {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	conns := make([]*IsoConnection, 0, len(ids))
+	for _, id := range ids {
+		conns = append(conns, server.connMap[id])
 	}
 	return conns
+}
+
+// nodeTargets returns the connections that get one step of a stress test. In advertised mode a step is
+// one message to every node, so each node receives request_per_second. In round_robin mode a step is one
+// message to the next node in turn, so request_per_second is the total across all nodes.
+func nodeTargets(mode string, conns []*IsoConnection, next *int) []*IsoConnection {
+	if mode != domain.NodeTestModeRoundRobin || len(conns) == 0 {
+		return conns
+	}
+	i := *next % len(conns)
+	*next++
+	return conns[i : i+1]
 }
 
 func validateClient(connState tls.ConnectionState, expectedCN string) error {
@@ -389,8 +408,9 @@ func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.Is
 	defer ticker.Stop()
 
 	start := time.Now()
-	rounds := 0 // rounds sent so far; each round is one message to every connection
-	count := 0  // messages queued in total
+	steps := 0 // steps sent so far; see nodeTargets for what one step sends
+	next := 0  // round_robin: position of the node that gets the next message
+	count := 0 // messages queued in total
 loop:
 	for {
 		select {
@@ -399,8 +419,8 @@ loop:
 		case now := <-ticker.C:
 			due := int(now.Sub(start).Seconds() * float64(stressTest.RequestPerSecond))
 			conns := server.connections()
-			for ; rounds < due; rounds++ {
-				for _, conn := range conns {
+			for ; steps < due; steps++ {
+				for _, conn := range nodeTargets(stressTest.NodeTestMode, conns, &next) {
 					select {
 					case jobs <- conn:
 						count++
@@ -415,7 +435,7 @@ loop:
 	workers.Wait()
 
 	elapsed := time.Since(start)
-	log.Printf("Stress test completed: %d requests sent in %v (%.0f/s)", count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
+	log.Printf("Stress test completed (%s): %d requests sent in %v (%.0f/s)", stressTest.NodeTestMode, count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
 	if err := server.db.SetTotalRequests(stressTest.ID, count); err != nil {
 		log.Println("DB Write error:", err)
 	}

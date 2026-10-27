@@ -10,10 +10,10 @@ import (
 )
 
 // Create a new stress test
-func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int) (*domain.StressTest, error) {
+func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSecond int, nodeTestMode string) (*domain.StressTest, error) {
 	result, err := s.db.Exec(
-		"INSERT INTO stress_test (name, test_time_secs, request_per_second) VALUES (?, ?, ?)",
-		name, testTimeSecs, requestsPerSecond,
+		"INSERT INTO stress_test (name, test_time_secs, request_per_second, node_test_mode) VALUES (?, ?, ?, ?)",
+		name, testTimeSecs, requestsPerSecond, nodeTestMode,
 	)
 	if err != nil {
 		return nil, err
@@ -30,6 +30,7 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 		CreatedAt:        time.Now(),
 		TestTimeSecs:     testTimeSecs,
 		RequestPerSecond: requestsPerSecond,
+		NodeTestMode:     nodeTestMode,
 	}, nil
 }
 
@@ -85,9 +86,9 @@ func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, re
 func (s *StressTestDB) GetStressTest(id int) (*domain.StressTest, error) {
 	var test domain.StressTest
 	err := s.db.QueryRow(
-		"SELECT id, name, created_at, total_requests, test_time_secs, request_per_second FROM stress_test WHERE id = ?",
+		"SELECT id, name, created_at, total_requests, test_time_secs, request_per_second, node_test_mode FROM stress_test WHERE id = ?",
 		id,
-	).Scan(&test.ID, &test.Name, &test.CreatedAt, &test.TotalRequests, &test.TestTimeSecs, &test.RequestPerSecond)
+	).Scan(&test.ID, &test.Name, &test.CreatedAt, &test.TotalRequests, &test.TestTimeSecs, &test.RequestPerSecond, &test.NodeTestMode)
 
 	if err != nil {
 		return nil, err
