@@ -38,7 +38,6 @@ func main() {
 		log.Fatal("Failed to initialize database:", err)
 		return
 	}
-	defer db.Close()
 
 	err = utils.LoadTemplates(cfg.Data.TemplatesPath)
 
@@ -107,6 +106,7 @@ func main() {
 		StressRunner: str,
 	}
 	server := handlers.New("1.0", app)
-	server.StartServer(cfg.Server.HTTPPort)
 	//server.StartStress(5)
+	// Blocks until Ctrl-C/SIGTERM, then stops the ISO server and flushes and closes the database
+	serveUntilSignal(server, cfg.Server.HTTPPort, isoServer, db)
 }

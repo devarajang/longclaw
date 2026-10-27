@@ -2,13 +2,15 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type StressTestDB struct {
-	db *sql.DB
+	db     *sql.DB
+	writer *batchWriter // all hot-path writes go through here, batched into transactions
 }
 
 // Initialize database and create tables if they don't exist
@@ -52,9 +54,20 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 			stresstest_id INTEGER NOT NULL,
 			reference TEXT NOT NULL,
 			connection_id TEXT NOT NULL,
+			mti TEXT,
 			FOREIGN KEY (stresstest_id) REFERENCES stress_test (id)
 		)
 	`)
+	if err != nil {
+		return nil, err
+	}
+	// Databases created before the mti column existed
+	if err := addColumnIfMissing(db, "request_response_log", "mti", "TEXT"); err != nil {
+		return nil, err
+	}
+
+	// UpdateResponseTime looks rows up by reference and connection; without this index every response scans the table
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_request_response_log_reference ON request_response_log (reference, connection_id)`)
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +89,32 @@ func NewStressTestDB(dbPath string) (*StressTestDB, error) {
 		return nil, err
 	}
 
-	return &StressTestDB{db: db}, nil
+	// MarkScheduledMessageSent looks follow-ups up by reference and connection; without this index each
+	// update scans the whole table, which stalled the batch writer under load
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_message_reference ON scheduled_message (reference, connection_id)`)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StressTestDB{db: db, writer: newBatchWriter(db)}, nil
 }
 
-// Close database connection
+// addColumnIfMissing adds a column to an existing table; CREATE TABLE IF NOT EXISTS does not change
+// tables created by older versions
+func addColumnIfMissing(db *sql.DB, table, column, columnType string) error {
+	var exists int
+	if err := db.QueryRow("SELECT count(*) FROM pragma_table_info(?) WHERE name = ?", table, column).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+	_, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, columnType))
+	return err
+}
+
+// Close flushes queued writes, then closes the database connection
 func (s *StressTestDB) Close() error {
+	s.writer.Close()
 	return s.db.Close()
 }

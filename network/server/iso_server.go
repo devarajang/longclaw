@@ -23,7 +23,7 @@ import (
 	"github.com/devarajang/longclaw/utils"
 )
 
-var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+var errTestInProgress = errors.New("connection test is already in progress")
 
 type IsoRequestResponse struct {
 	requestTime  time.Time
@@ -31,7 +31,27 @@ type IsoRequestResponse struct {
 	rawRequest   []byte
 	rawResponse  []byte
 	reference    string
+	mti          string // request MTI; with reference it identifies the response to wait for
 	stressTestId int
+}
+
+// sentRequest is what sentTimes holds for a request awaiting its response
+type sentRequest struct {
+	mti    string
+	sentAt time.Time
+}
+
+// pendingFollowUp is a reversal or advice to send once the original request's response arrives
+type pendingFollowUp struct {
+	mti          string
+	rawMessage   string
+	stressTestId int
+}
+
+// matchKey pairs a request with its response: same reference (field 37) and same MTI with the function
+// digit made even, so 0100 and 0110 match but 0100 and 0420 carrying the same reference do not.
+func matchKey(mti, reference string) string {
+	return mti[:2] + string(mti[2]&^1) + mti[3:4] + "|" + reference
 }
 
 type IsoConnection struct {
@@ -41,21 +61,36 @@ type IsoConnection struct {
 	closeChannel chan struct{}
 	db           *database.StressTestDB
 	connTestMap  sync.Map
+	closeOnce    sync.Once
+	onClose      func()   // removes the connection from the server's map
+	sentTimes    sync.Map // matchKey -> sentRequest, for requests written to the socket and not yet answered
+	followUps    sync.Map // reference -> *pendingFollowUp, sent when the original's response arrives
 }
 
+// writeChannelSize is how many messages a connection can queue before new ones are dropped
+const writeChannelSize = 1024
+
 func (c *IsoConnection) HandleRead() {
+	defer c.Close()
 	for {
 		message, err := readLengthPrefixedMessage(c.conn)
+		// Stamp on read so time spent on our side afterwards (parsing, DB) is not counted as latency
+		receivedAt := time.Now()
 		if err != nil {
 			log.Printf("Error: %v", err)
 			return
 		}
 		n := len(message)
+		// MTI + primary bitmap is the shortest frame that can be parsed
+		if n < 20 {
+			log.Printf("Dropping short message (%d bytes) from %v", n, c.conn.RemoteAddr())
+			continue
+		}
 		msgBody := string(message[0:n])
 		mti := msgBody[0:4]
 
 		// Echo-test path: route 0810 responses back to our own 0800 pings.
-		if mti == "0810" || mti == "0800" {
+		if (mti == "0810" || mti == "0800") && n >= 46 {
 			stan := msgBody[36:46]
 			if waitChan, ok := c.connTestMap.Load(stan); ok {
 				waitChan.(chan string) <- msgBody
@@ -71,21 +106,65 @@ func (c *IsoConnection) HandleRead() {
 
 		switch {
 		case isRequestMTI(mti):
-			resp, err := buildResponse(isoMessage)
-			if err != nil {
-				log.Printf("Response build error: %v", err)
+			// buildResponse sleeps to simulate a slow issuer for some PANs; respond from a goroutine
+			// so that delay does not hold up reading the next message on this connection
+			go c.respond(isoMessage)
+		case isResponseMTI(mti):
+			reference := isoMessage.GetField(36)
+			sent, ok := c.sentTimes.LoadAndDelete(matchKey(mti, reference))
+			if !ok {
+				unmatchedCount.Add(1)
 				continue
 			}
-			select {
-			case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
-			default:
-				log.Println("Write channel full, dropping response")
+			request := sent.(sentRequest)
+			// Only queues the write, so a slow database does not delay reading responses
+			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt); err != nil {
+				log.Println("Response time update error:", err)
 			}
-		case isResponseMTI(mti):
-			c.db.UpdateResponseTime(isoMessage.GetField(36), c.conn.RemoteAddr().String())
+			// The original is answered, so its reversal or advice can go now
+			if followUp, ok := c.followUps.LoadAndDelete(reference); ok {
+				c.sendFollowUp(reference, followUp.(*pendingFollowUp))
+			}
 		}
 	}
 }
+
+// sendFollowUp logs and queues a reversal or advice whose original request has been answered
+func (c *IsoConnection) sendFollowUp(reference string, followUp *pendingFollowUp) {
+	connectionID := c.conn.RemoteAddr().String()
+	now := time.Now()
+	// Log before enqueueing so the row exists before the follow-up's response can arrive
+	if err := c.db.AddRequestLog(followUp.stressTestId, now, reference, connectionID, followUp.mti); err != nil {
+		log.Println("DB Write error:", err)
+		return
+	}
+	select {
+	case c.writeChannel <- IsoRequestResponse{reference: reference, mti: followUp.mti, stressTestId: followUp.stressTestId, rawRequest: []byte(followUp.rawMessage)}:
+		if err := c.db.MarkScheduledMessageSent(reference, connectionID, now); err != nil {
+			log.Println("DB Write error:", err)
+		}
+	default:
+		droppedCount.Add(1)
+		if err := c.db.DeleteRequestLog(reference, connectionID, followUp.mti); err != nil {
+			log.Println("DB Write error:", err)
+		}
+	}
+}
+
+// respond builds the issuer response to an incoming request and queues it for writing
+func (c *IsoConnection) respond(request *iso.Iso8583Message) {
+	resp, err := buildResponse(request)
+	if err != nil {
+		log.Printf("Response build error: %v", err)
+		return
+	}
+	select {
+	case c.writeChannel <- IsoRequestResponse{rawRequest: []byte(resp.FormatIso())}:
+	default:
+		droppedCount.Add(1)
+	}
+}
+
 func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	// Read 2-byte length prefix
 	lengthBytes := make([]byte, 2)
@@ -105,9 +184,15 @@ func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	return message, nil
 }
 
+// Close shuts the connection down once; the read loop, write loop and TestConnection may all call it
 func (sc *IsoConnection) Close() {
-	close(sc.closeChannel)
-	sc.conn.Close()
+	sc.closeOnce.Do(func() {
+		close(sc.closeChannel)
+		sc.conn.Close()
+		if sc.onClose != nil {
+			sc.onClose()
+		}
+	})
 }
 
 func (c *IsoConnection) TestConnection() (bool, error) {
@@ -120,7 +205,7 @@ func (c *IsoConnection) TestConnection() (bool, error) {
 		return isEmpty
 	})
 	if !isEmpty {
-		return false, errors.New("connection test is already in progress")
+		return false, errTestInProgress
 	}
 	formatString := time.Now().Format("0102150405")
 	isoMessage := "080082200000000000000400000000000000" + formatString + "026612361"
@@ -158,9 +243,15 @@ func (c *IsoConnection) HandleChannelEvents() {
 			binary.BigEndian.PutUint16(buf, uint16(len(msg.rawRequest)))
 			buf = append(buf, msg.rawRequest...)
 
+			if msg.reference != "" {
+				// Stamp just before the write so latency excludes time queued on our side.
+				// Stored before writing so a fast response can never arrive ahead of it.
+				c.sentTimes.Store(matchKey(msg.mti, msg.reference), sentRequest{mti: msg.mti, sentAt: time.Now()})
+			}
 			_, err := c.conn.Write(buf)
 			if err != nil {
 				log.Println("Socket write error:", err)
+				c.Close()
 				return
 			}
 			sentCount.Add(1)
@@ -174,7 +265,36 @@ type IsoServer struct {
 	listener net.Listener
 	config   *config.Config
 	connMap  map[string]*IsoConnection
+	connMu   sync.RWMutex // guards connMap: written by connection goroutines, read by HTTP handlers and RunStress
 	db       *database.StressTestDB
+}
+
+func (server *IsoServer) getConn(clientId string) (*IsoConnection, bool) {
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	conn, ok := server.connMap[clientId]
+	return conn, ok
+}
+
+// removeConn deletes clientId from connMap if it still maps to conn
+func (server *IsoServer) removeConn(clientId string, conn *IsoConnection) {
+	server.connMu.Lock()
+	defer server.connMu.Unlock()
+	if server.connMap[clientId] == conn {
+		delete(server.connMap, clientId)
+		log.Println("Client disconnected:", clientId)
+	}
+}
+
+// connections returns a snapshot of the connected clients, safe to use without holding the lock
+func (server *IsoServer) connections() []*IsoConnection {
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	conns := make([]*IsoConnection, 0, len(server.connMap))
+	for _, conn := range server.connMap {
+		conns = append(conns, conn)
+	}
+	return conns
 }
 
 func validateClient(connState tls.ConnectionState, expectedCN string) error {
@@ -200,7 +320,7 @@ func validateClient(connState tls.ConnectionState, expectedCN string) error {
 }
 
 func (server *IsoServer) SendMessage(clientId string, rawMsg string) error {
-	conn, ok := server.connMap[clientId]
+	conn, ok := server.getConn(clientId)
 	if !ok {
 		return errors.New("client not found: " + clientId)
 	}
@@ -216,7 +336,7 @@ func (server *IsoServer) SendMessage(clientId string, rawMsg string) error {
 }
 
 func (server *IsoServer) TestConnection(clientId string) (string, error) {
-	conn, ok := server.connMap[clientId]
+	conn, ok := server.getConn(clientId)
 
 	if ok == false {
 		return "", errors.New("Client is not in the connected list")
@@ -225,41 +345,79 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 
 	if testStatus == true {
 		log.Printf("Client socket validation:  %v,  %s", testStatus, err)
-	} else {
-		delete(server.connMap, clientId)
-		log.Println(server.connMap)
+	} else if !errors.Is(err, errTestInProgress) {
+		// Close also removes the client from connMap via onClose
+		conn.Close()
+		log.Println("Closed client after failed connection test:", clientId)
 	}
 	return fmt.Sprintf("Client socket validation:  %v,  %s", testStatus, err), nil
 }
 
+// stressWorkers is how many goroutines build and queue stress messages. It is bounded so a slow
+// database or socket backs the generator up instead of piling up one goroutine per message.
+const stressWorkers = 64
+
+// RunStress sends RequestPerSecond messages per second to every connected client for TestTimeSecs.
+// The number due is worked out from elapsed time, so late or dropped ticks are made up on the next one.
 func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
+	if stressTest.TestTimeSecs <= 0 || stressTest.RequestPerSecond <= 0 {
+		log.Printf("Skipping stress test %d: test_time_secs and request_per_second must be greater than 0", stressTest.ID)
+		return
+	}
 	// 1. Create a context with timeout based on stress test duration
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(stressTest.TestTimeSecs)*time.Second)
 	defer cancel() // Ensure context is cancelled when function exits
 
-	// Calculate interval for desired RPS
+	jobs := make(chan *IsoConnection, stressWorkers*16)
+	var workers sync.WaitGroup
+	for i := 0; i < stressWorkers; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for conn := range jobs {
+				sendSingleMessage(conn, stressTest, isoSpec)
+			}
+		}()
+	}
+
+	// Tick at the request interval, but no faster than 1ms: Go cannot deliver sub-millisecond ticks reliably
 	interval := time.Second / time.Duration(stressTest.RequestPerSecond)
-	ticker := time.NewTicker(interval) // Creates a ticker that fires at the calculated interval
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	count := 0 // Track number of iterations
+	start := time.Now()
+	rounds := 0 // rounds sent so far; each round is one message to every connection
+	count := 0  // messages queued in total
+loop:
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("Stress test completed: %d requests sent\n", count)
-			return
-		case <-ticker.C:
-			// Send to all connections
-			for _, connName := range server.GetConnectedClients() {
-				conn, ok := server.connMap[connName]
-				if !ok {
-					continue
+			break loop
+		case now := <-ticker.C:
+			due := int(now.Sub(start).Seconds() * float64(stressTest.RequestPerSecond))
+			conns := server.connections()
+			for ; rounds < due; rounds++ {
+				for _, conn := range conns {
+					select {
+					case jobs <- conn:
+						count++
+					case <-ctx.Done():
+						break loop
+					}
 				}
-
-				go sendSingleMessage(conn, stressTest, isoSpec)
 			}
-			count++
 		}
+	}
+	close(jobs)
+	workers.Wait()
+
+	elapsed := time.Since(start)
+	log.Printf("Stress test completed: %d requests sent in %v (%.0f/s)", count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
+	if err := server.db.SetTotalRequests(stressTest.ID, count); err != nil {
+		log.Println("DB Write error:", err)
 	}
 }
 
@@ -273,6 +431,9 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 
 	getIsoMessage := func(message string) (*iso.Iso8583Message, error) {
 		isoMessage, err := iso.NewIso8583Message(message, isoSpec)
+		if err != nil {
+			return nil, err
+		}
 		if isoMessage.GetField(1) != "" {
 			isoMessage.SetField(1, card.CardNumber)
 		}
@@ -306,56 +467,67 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		}
 
 		isoMessage.SetField(36, reference)
-		return isoMessage, err
+		return isoMessage, nil
 	}
 
 	var isoMessage, scheduledMessage *iso.Iso8583Message
+	var err error
 	if randomTemplate.OriginalMessage != "" {
-		isoMessage, _ = getIsoMessage(randomTemplate.OriginalMessage)
-		scheduledMessage, _ = getIsoMessage(randomTemplate.Message)
-		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String(), scheduledMessage.FormatIso())
+		if isoMessage, err = getIsoMessage(randomTemplate.OriginalMessage); err == nil {
+			scheduledMessage, err = getIsoMessage(randomTemplate.Message)
+		}
 	} else {
-		isoMessage, _ = getIsoMessage(randomTemplate.Message)
+		isoMessage, err = getIsoMessage(randomTemplate.Message)
+	}
+	if err != nil {
+		log.Println("Template parse error:", err)
+		return
+	}
+	connectionID := conn.conn.RemoteAddr().String()
+	if scheduledMessage != nil {
+		// Recorded now with sent_at empty; HandleRead sends it once the original is answered.
+		// Registered before the original is queued so its response cannot arrive first.
+		conn.db.AddScheduledMessage(stressTest.ID, time.Now(), reference, connectionID, scheduledMessage.FormatIso())
+		conn.followUps.Store(reference, &pendingFollowUp{
+			mti:          scheduledMessage.GetMTI(),
+			rawMessage:   scheduledMessage.FormatIso(),
+			stressTestId: stressTest.ID,
+		})
 	}
 
-	/*if err != nil {
-	fmt.Println("ISO Error:", err)
-	return
-	}*/
 	req := IsoRequestResponse{
 		reference:    reference,
+		mti:          isoMessage.GetMTI(),
 		stressTestId: stressTest.ID,
 		rawRequest:   []byte(isoMessage.FormatIso()),
 	}
 
-	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, conn.conn.RemoteAddr().String()); err != nil {
+	// Log before enqueueing so the row exists before any response can arrive.
+	// request_time is replaced with the actual send time when the response is matched.
+	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, connectionID, req.mti); err != nil {
 		log.Println("DB Write error:", err)
+		conn.followUps.Delete(reference)
 		return
 	}
 
 	select {
 	case conn.writeChannel <- req:
 	default:
-		fmt.Println("Write channel full, skipping message")
-	}
-	if randomTemplate.OriginalMessage != "" {
-		req = IsoRequestResponse{
-			reference:    utils.GenerateTimestampID(),
-			stressTestId: stressTest.ID,
-			rawRequest:   []byte(scheduledMessage.FormatIso()),
-		}
-		select {
-		case conn.writeChannel <- req:
-		default:
-			fmt.Println("Write channel full, skipping message")
+		droppedCount.Add(1)
+		// Never sent, so it must not count as a request without a response, and its follow-up never goes
+		conn.followUps.Delete(reference)
+		if err := conn.db.DeleteRequestLog(reference, connectionID, req.mti); err != nil {
+			log.Println("DB Write error:", err)
 		}
 	}
 }
 
 func (server *IsoServer) GetConnectedClients() []string {
-	keys := make([]string, len(server.connMap))
+	server.connMu.RLock()
+	defer server.connMu.RUnlock()
+	keys := make([]string, 0, len(server.connMap))
 
-	for key, _ := range server.connMap {
+	for key := range server.connMap {
 		if len(key) > 0 {
 			keys = append(keys, key)
 		}
@@ -365,7 +537,13 @@ func (server *IsoServer) GetConnectedClients() []string {
 
 func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 
-	//defer conn.Close()
+	// Close the socket on every early return; once registered, IsoConnection.Close owns it
+	registered := false
+	defer func() {
+		if !registered {
+			conn.Close()
+		}
+	}()
 	remoteAddr := conn.RemoteAddr()
 
 	tlsConn, ok := conn.(*tls.Conn)
@@ -382,12 +560,12 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	}
 	log.Printf("[TLS] Handshake complete with %v", remoteAddr)
 
-	// Simulate random 8 percent disconnect after client cert is received
-	roll := rng.Intn(100)
-	log.Printf("[TLS] Random roll: %d (0=disconnect, 1=allow) for %v", roll, remoteAddr)
-	if roll <= 8 {
+	// Simulate random 8 percent disconnect after client cert is received.
+	// Top-level rand functions are safe for concurrent use, unlike a shared *rand.Rand.
+	roll := rand.Intn(100)
+	log.Printf("[TLS] Random roll: %d (0-7=disconnect, 8-99=allow) for %v", roll, remoteAddr)
+	if roll < 8 {
 		log.Printf("[TLS] Simulated disconnect after handshake from %v", remoteAddr)
-		conn.Close()
 		return
 	}
 
@@ -400,11 +578,16 @@ func (server *IsoServer) HandleNewConnect(conn net.Conn) {
 	isoConn := &IsoConnection{
 		conn:         conn,
 		readChannel:  make(chan IsoRequestResponse, 16),
-		writeChannel: make(chan IsoRequestResponse, 16),
+		writeChannel: make(chan IsoRequestResponse, writeChannelSize),
 		closeChannel: make(chan struct{}),
 		db:           server.db,
 	}
-	server.connMap[remoteAddr.String()] = isoConn
+	clientId := remoteAddr.String()
+	isoConn.onClose = func() { server.removeConn(clientId, isoConn) }
+	server.connMu.Lock()
+	server.connMap[clientId] = isoConn
+	server.connMu.Unlock()
+	registered = true
 
 	go isoConn.HandleRead()
 	go isoConn.HandleChannelEvents()
@@ -440,16 +623,35 @@ func (server *IsoServer) StartListen() error {
 	if err != nil {
 		return err
 	}
+	server.connMu.Lock()
 	server.listener = listener
+	server.connMu.Unlock()
 	log.Println("Started TLS socket server", listener.Addr())
 	go reportSentPerMinute()
 	for {
-		conn, err := server.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
+			// Stop closed the listener: a normal shutdown, not a failure
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 		log.Printf("[TCP] New connection from %v", conn.RemoteAddr())
 		go server.HandleNewConnect(conn)
+	}
+}
+
+// Stop closes the listener, so StartListen returns nil, and then every client connection
+func (server *IsoServer) Stop() {
+	server.connMu.RLock()
+	listener := server.listener
+	server.connMu.RUnlock()
+	if listener != nil {
+		listener.Close()
+	}
+	for _, conn := range server.connections() {
+		conn.Close()
 	}
 }
 
