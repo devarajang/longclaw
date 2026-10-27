@@ -297,30 +297,65 @@ func (server *IsoServer) TestConnection(clientId string) (string, error) {
 	return fmt.Sprintf("Client socket validation:  %v,  %s", testStatus, err), nil
 }
 
+// stressWorkers is how many goroutines build and queue stress messages. It is bounded so a slow
+// database or socket backs the generator up instead of piling up one goroutine per message.
+const stressWorkers = 64
+
+// RunStress sends RequestPerSecond messages per second to every connected client for TestTimeSecs.
+// The number due is worked out from elapsed time, so late or dropped ticks are made up on the next one.
 func (server *IsoServer) RunStress(stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
 	// 1. Create a context with timeout based on stress test duration
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(stressTest.TestTimeSecs)*time.Second)
 	defer cancel() // Ensure context is cancelled when function exits
 
-	// Calculate interval for desired RPS
+	jobs := make(chan *IsoConnection, stressWorkers*16)
+	var workers sync.WaitGroup
+	for i := 0; i < stressWorkers; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for conn := range jobs {
+				sendSingleMessage(conn, stressTest, isoSpec)
+			}
+		}()
+	}
+
+	// Tick at the request interval, but no faster than 1ms: Go cannot deliver sub-millisecond ticks reliably
 	interval := time.Second / time.Duration(stressTest.RequestPerSecond)
-	ticker := time.NewTicker(interval) // Creates a ticker that fires at the calculated interval
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	count := 0 // Track number of iterations
+	start := time.Now()
+	rounds := 0 // rounds sent so far; each round is one message to every connection
+	count := 0  // messages queued in total
+loop:
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("Stress test completed: %d requests sent\n", count)
-			return
-		case <-ticker.C:
-			// Send to all connections
-			for _, conn := range server.connections() {
-				go sendSingleMessage(conn, stressTest, isoSpec)
+			break loop
+		case now := <-ticker.C:
+			due := int(now.Sub(start).Seconds() * float64(stressTest.RequestPerSecond))
+			conns := server.connections()
+			for ; rounds < due; rounds++ {
+				for _, conn := range conns {
+					select {
+					case jobs <- conn:
+						count++
+					case <-ctx.Done():
+						break loop
+					}
+				}
 			}
-			count++
 		}
 	}
+	close(jobs)
+	workers.Wait()
+
+	elapsed := time.Since(start)
+	log.Printf("Stress test completed: %d requests sent in %v (%.0f/s)", count, elapsed.Round(time.Millisecond), float64(count)/elapsed.Seconds())
 }
 
 func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
