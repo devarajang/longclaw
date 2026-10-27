@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/devarajang/longclaw/database"
 	"github.com/devarajang/longclaw/dtos"
@@ -47,11 +49,30 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 	json.NewEncoder(w).Encode(dtos.ErrorResponse{Error: code, Message: message})
 }
 
-func (h *Handlers) StartServer(addr string) {
+// StartServer serves HTTP until ctx is cancelled, then shuts down gracefully, letting in-flight requests
+// finish for up to 5s. It returns early with the error if the server cannot start (e.g. port in use).
+func (h *Handlers) StartServer(ctx context.Context, addr string) error {
 	h.routes()
-	log.Println("Starting HTTP server", addr)
-	http.ListenAndServe(addr, h.Mux)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           h.Mux,
+		ReadHeaderTimeout: 10 * time.Second, // don't let idle clients hold connections open forever
+	}
 
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Println("Starting HTTP server", addr)
+		serveErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
 }
 
 func (h *Handlers) routes() {
