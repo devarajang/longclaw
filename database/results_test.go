@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/devarajang/longclaw/internal/domain"
 )
 
 func TestPercentile(t *testing.T) {
@@ -52,6 +54,9 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 			t.Fatal(err)
 		}
 	}
+	if err := addRefundColumns(db); err != nil {
+		t.Fatal(err)
+	}
 	return &StressTestDB{db: db, writer: newBatchWriter(db)}
 }
 
@@ -60,7 +65,7 @@ func newResultsTestDB(t *testing.T) *StressTestDB {
 // Of 3 scheduled follow-ups, 1 was never sent.
 func seedResults(t *testing.T, s *StressTestDB) int {
 	t.Helper()
-	test, err := s.CreateStressTest("results", 4, 3, "advertised")
+	test, err := s.CreateStressTest("results", 4, 3, "advertised", "sale", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,10 +182,11 @@ func TestSetTotalRequests(t *testing.T) {
 func TestUpdateResponseTimeOnlyUpdatesUnansweredRow(t *testing.T) {
 	s := newResultsTestDB(t)
 	start := time.Now()
-	s.AddRequestLog(1, start, "ref", "c1", "0200")
-	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(10*time.Millisecond))
-	s.AddRequestLog(1, start, "ref", "c1", "0200") // follow-up, sent after the original was answered
-	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(70*time.Millisecond))
+	entry := domain.RequestLog{StressTestID: 1, RequestTime: start, Reference: "ref", ConnectionID: "c1", MTI: "0200"}
+	s.AddRequestLog(entry)
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(10*time.Millisecond), "00", "")
+	s.AddRequestLog(entry) // follow-up, sent after the original was answered
+	s.UpdateResponseTime("ref", "c1", "0200", start, start.Add(70*time.Millisecond), "00", "")
 	s.writer.Close()
 
 	rows, err := s.db.Query("SELECT time_taken FROM request_response_log ORDER BY id")
@@ -222,7 +228,7 @@ func TestAddColumnIfMissing(t *testing.T) {
 
 func TestNodeTestModeIsStored(t *testing.T) {
 	s := newResultsTestDB(t)
-	created, err := s.CreateStressTest("rr", 5, 4, "round_robin")
+	created, err := s.CreateStressTest("rr", 5, 4, "round_robin", "sale", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,6 +255,10 @@ func TestNodeTestModeMigrationDefaultsToAdvertised(t *testing.T) {
 	if err := addColumnIfMissing(db, "stress_test", "node_test_mode", "TEXT NOT NULL DEFAULT 'advertised'"); err != nil {
 		t.Fatal(err)
 	}
+	db.Exec("CREATE TABLE request_response_log (id INTEGER PRIMARY KEY, stresstest_id INTEGER, reference TEXT, mti TEXT)")
+	if err := addRefundColumns(db); err != nil {
+		t.Fatal(err)
+	}
 	s := &StressTestDB{db: db}
 	got, err := s.GetStressTest(1)
 	if err != nil {
@@ -256,5 +266,8 @@ func TestNodeTestModeMigrationDefaultsToAdvertised(t *testing.T) {
 	}
 	if got.NodeTestMode != "advertised" {
 		t.Errorf("old test node_test_mode = %q, want advertised", got.NodeTestMode)
+	}
+	if got.TestType != "sale" || got.SourceTestID != 0 {
+		t.Errorf("old test test_type/source_test_id = %q/%d, want sale/0", got.TestType, got.SourceTestID)
 	}
 }

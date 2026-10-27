@@ -18,8 +18,22 @@ func (h *Handlers) CreateTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Invalid JSON"}`, http.StatusBadRequest)
 		return
 	}
-	// RunStress divides by request_per_second, so zero or negative values would crash the server
-	if stressTestReq.TestTimeSecs <= 0 || stressTestReq.RequestPerSecond <= 0 {
+	switch stressTestReq.TestType {
+	case "":
+		stressTestReq.TestType = domain.TestTypeSale
+	case domain.TestTypeSale:
+	case domain.TestTypeRefund:
+		if stressTestReq.SourceTestID <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "source_test_id is required for refund tests")
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "test_type must be sale or refund")
+		return
+	}
+	// RunStress divides by request_per_second, so zero or negative values would crash the server.
+	// A refund test runs until every sale is refunded, so it does not need test_time_secs.
+	if stressTestReq.RequestPerSecond <= 0 || (stressTestReq.TestType == domain.TestTypeSale && stressTestReq.TestTimeSecs <= 0) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "test_time_secs and request_per_second must be greater than 0")
 		return
 	}
@@ -36,7 +50,8 @@ func (h *Handlers) CreateTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "test_in_progress", "a stress test is already running")
 		return
 	}
-	stressTest, err := h.App.DB.CreateStressTest(stressTestReq.Name, stressTestReq.TestTimeSecs, stressTestReq.RequestPerSecond, stressTestReq.NodeTestMode)
+	stressTest, err := h.App.DB.CreateStressTest(stressTestReq.Name, stressTestReq.TestTimeSecs, stressTestReq.RequestPerSecond,
+		stressTestReq.NodeTestMode, stressTestReq.TestType, stressTestReq.SourceTestID)
 	if err != nil {
 		h.App.StressRunner.Release()
 		log.Println("Failed to create stress test:", err)

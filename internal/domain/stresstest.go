@@ -8,6 +8,12 @@ const (
 	NodeTestModeRoundRobin = "round_robin" // request_per_second in total, sent to one node at a time in turn
 )
 
+// Test types: what a stress test sends
+const (
+	TestTypeSale   = "sale"   // template messages for test_time_secs (default)
+	TestTypeRefund = "refund" // one refund per approved sale of source_test_id
+)
+
 // StressTest represents a stress test configuration
 type StressTest struct {
 	ID               int       `json:"id"`
@@ -17,4 +23,6 @@ type StressTest struct {
 	TestTimeSecs     int       `json:"test_time_secs"`
 	RequestPerSecond int       `json:"request_per_second"`
 	NodeTestMode     string    `json:"node_test_mode"` // NodeTestModeAdvertised or NodeTestModeRoundRobin
+	TestType         string    `json:"test_type"`      // TestTypeSale or TestTypeRefund
+	SourceTestID     int       `json:"source_test_id"` // refund tests: the test whose sales get refunded
 }

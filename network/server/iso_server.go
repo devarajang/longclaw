@@ -119,7 +119,8 @@ func (c *IsoConnection) HandleRead() {
 			}
 			request := sent.(sentRequest)
 			// Only queues the write, so a slow database does not delay reading responses
-			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt); err != nil {
+			if err := c.db.UpdateResponseTime(reference, c.conn.RemoteAddr().String(), request.mti, request.sentAt, receivedAt,
+				isoMessage.GetField(fieldIdxResponseCode), isoMessage.GetField(fieldIdxAuthID)); err != nil {
 				log.Println("Response time update error:", err)
 			}
 			// The original is answered, so its reversal or advice can go now
@@ -135,7 +136,8 @@ func (c *IsoConnection) sendFollowUp(reference string, followUp *pendingFollowUp
 	connectionID := c.conn.RemoteAddr().String()
 	now := time.Now()
 	// Log before enqueueing so the row exists before the follow-up's response can arrive
-	if err := c.db.AddRequestLog(followUp.stressTestId, now, reference, connectionID, followUp.mti); err != nil {
+	entry := domain.RequestLog{StressTestID: followUp.stressTestId, RequestTime: now, Reference: reference, ConnectionID: connectionID, MTI: followUp.mti}
+	if err := c.db.AddRequestLog(entry); err != nil {
 		log.Println("DB Write error:", err)
 		return
 	}
@@ -441,6 +443,23 @@ loop:
 	}
 }
 
+// newRequestLog is the request_response_log row for a message about to be sent. It keeps the
+// request details a refund test needs to find and replay approved sales.
+func newRequestLog(stressTestID int, reference, connectionID string, msg *iso.Iso8583Message) domain.RequestLog {
+	return domain.RequestLog{
+		StressTestID:   stressTestID,
+		RequestTime:    time.Now(),
+		Reference:      reference,
+		ConnectionID:   connectionID,
+		MTI:            msg.GetMTI(),
+		ProcessingCode: msg.GetField(2),
+		PAN:            msg.GetField(1),
+		Amount:         msg.GetField(3),
+		Currency:       msg.GetField(48),
+		RequestMessage: msg.FormatIso(),
+	}
+}
+
 func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpec *iso.IsoSpec) {
 	reference := utils.GenerateTimestampID()
 	randomTemplate := utils.RandomTemplate()
@@ -515,16 +534,17 @@ func sendSingleMessage(conn *IsoConnection, stressTest domain.StressTest, isoSpe
 		})
 	}
 
+	entry := newRequestLog(stressTest.ID, reference, connectionID, isoMessage)
 	req := IsoRequestResponse{
 		reference:    reference,
-		mti:          isoMessage.GetMTI(),
+		mti:          entry.MTI,
 		stressTestId: stressTest.ID,
-		rawRequest:   []byte(isoMessage.FormatIso()),
+		rawRequest:   []byte(entry.RequestMessage),
 	}
 
 	// Log before enqueueing so the row exists before any response can arrive.
 	// request_time is replaced with the actual send time when the response is matched.
-	if err := conn.db.AddRequestLog(stressTest.ID, time.Now(), reference, connectionID, req.mti); err != nil {
+	if err := conn.db.AddRequestLog(entry); err != nil {
 		log.Println("DB Write error:", err)
 		conn.followUps.Delete(reference)
 		return
