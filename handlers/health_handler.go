@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
 	"github.com/devarajang/longclaw/database"
+	"github.com/devarajang/longclaw/dtos"
 	network "github.com/devarajang/longclaw/network/server"
 	"github.com/devarajang/longclaw/runner"
 )
@@ -36,6 +38,13 @@ func New(version string, app *App) *Handlers {
 
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(h.Version))
+}
+
+// writeError sends a JSON dtos.ErrorResponse with the given HTTP status
+func writeError(w http.ResponseWriter, status int, code string, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(dtos.ErrorResponse{Error: code, Message: message})
 }
 
 func (h *Handlers) StartServer(addr string) {
