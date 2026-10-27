@@ -10,7 +10,7 @@ type IsoMessage interface {
 	GetMTI() string
 	FormatPrint() string
 	SetField(fieldNum int, value string)
-	GetField(fieldNum int)
+	GetField(fieldNum int) string
 }
 
 type Iso8583Message struct {
@@ -21,71 +21,104 @@ type Iso8583Message struct {
 	isoSpec         *IsoSpec
 }
 
+// NewIso8583Message parses message using specRef. It returns an error, never panics,
+// when the message is truncated or malformed.
 func NewIso8583Message(message string, specRef *IsoSpec) (*Iso8583Message, error) {
-	currIndex := 4
+	currIndex := 0
 	isoMessage := Iso8583Message{message: message, isoSpec: specRef}
-	//fmt.Println(message)
+
+	// take returns the next n characters, or false if the message is too short
+	take := func(n int) (string, bool) {
+		if n < 0 || currIndex+n > len(message) {
+			return "", false
+		}
+		value := message[currIndex : currIndex+n]
+		currIndex += n
+		return value, true
+	}
+	tooShort := func(what string) error {
+		return fmt.Errorf("message too short for %s at offset %d (length %d)", what, currIndex, len(message))
+	}
+
+	if _, ok := take(4); !ok {
+		return nil, tooShort("MTI")
+	}
+	primary, ok := take(16)
+	if !ok {
+		return nil, tooShort("primary bitmap")
+	}
 	isoMessage.primaryBitMap = new(BitSet)
-	isoMessage.primaryBitMap.SetString(isoMessage.message[currIndex:(currIndex+16)], 16)
-	currIndex += 16
+	if err := isoMessage.primaryBitMap.SetString(primary, 16); err != nil {
+		return nil, fmt.Errorf("invalid primary bitmap %q: %w", primary, err)
+	}
 	if isoMessage.primaryBitMap.GetBit(0) {
+		secondary, ok := take(16)
+		if !ok {
+			return nil, tooShort("secondary bitmap")
+		}
 		isoMessage.secondaryBitMap = new(BitSet)
-		isoMessage.secondaryBitMap.SetString(isoMessage.message[currIndex:(currIndex+16)], 16)
-		currIndex += 16
+		if err := isoMessage.secondaryBitMap.SetString(secondary, 16); err != nil {
+			return nil, fmt.Errorf("invalid secondary bitmap %q: %w", secondary, err)
+		}
 	}
 	isoMessage.fields = make(map[int]string)
 
 	parseMessage := func(ind int) (string, error) {
-		value := ""
-		fieldDef := specRef.FieldDefMap[ind+1]
+		fieldNo := ind + 1
+		fieldDef, ok := specRef.FieldDefMap[fieldNo]
+		if !ok {
+			return "", fmt.Errorf("field %d is not in the spec", fieldNo)
+		}
 
-		//fmt.Println(fieldDef)
+		lengthDigits := 0
 		switch fieldDef.FieldType {
 		case "Fixed":
-			value = isoMessage.message[currIndex:(currIndex + fieldDef.MinLength)]
-			currIndex += fieldDef.MinLength
+			value, ok := take(fieldDef.MinLength)
+			if !ok {
+				return "", tooShort(fmt.Sprintf("field %d", fieldNo))
+			}
+			return value, nil
 		case "LLVar":
-			lengthStr := isoMessage.message[currIndex:(currIndex + 2)]
-			length, err := strconv.Atoi(lengthStr)
-			if err != nil {
-				return "", err
-			}
-			currIndex += 2
-			value = isoMessage.message[currIndex:(currIndex + length)]
-			currIndex += length
+			lengthDigits = 2
 		case "LLLVar":
-			lengthStr := isoMessage.message[currIndex:(currIndex + 3)]
-			length, err := strconv.Atoi(lengthStr)
-			if err != nil {
-				return "", err
-			}
-			currIndex += 3
-			value = isoMessage.message[currIndex:(currIndex + length)]
-			currIndex += length
+			lengthDigits = 3
+		default:
+			return "", fmt.Errorf("field %d has unknown type %q", fieldNo, fieldDef.FieldType)
 		}
-		//fmt.Println(value)
+
+		lengthStr, ok := take(lengthDigits)
+		if !ok {
+			return "", tooShort(fmt.Sprintf("field %d length", fieldNo))
+		}
+		length, err := strconv.Atoi(lengthStr)
+		if err != nil {
+			return "", fmt.Errorf("field %d has invalid length %q", fieldNo, lengthStr)
+		}
+		value, ok := take(length)
+		if !ok {
+			return "", tooShort(fmt.Sprintf("field %d", fieldNo))
+		}
 		return value, nil
 	}
 
 	for ind := 1; ind < isoMessage.primaryBitMap.BitLen(); ind++ {
 		if isoMessage.primaryBitMap.GetBit(ind) {
 			retVal, err := parseMessage(ind)
-			if err == nil {
-				isoMessage.fields[ind] = retVal
-			} else {
-				fmt.Println("Parse error", err.Error())
+			if err != nil {
+				return nil, err
 			}
-
+			isoMessage.fields[ind] = retVal
 		}
 	}
 
-	for ind := 0; ind < isoMessage.secondaryBitMap.BitLen(); ind++ {
-		if isoMessage.secondaryBitMap.GetBit(ind) {
-			retVal, err := parseMessage(64 + ind)
-			if err == nil {
+	if isoMessage.secondaryBitMap != nil {
+		for ind := 0; ind < isoMessage.secondaryBitMap.BitLen(); ind++ {
+			if isoMessage.secondaryBitMap.GetBit(ind) {
+				retVal, err := parseMessage(64 + ind)
+				if err != nil {
+					return nil, err
+				}
 				isoMessage.fields[64+ind] = retVal
-			} else {
-				fmt.Println("Parse error", err.Error())
 			}
 		}
 	}
@@ -171,7 +204,7 @@ func (m *Iso8583Message) FormatIso() string {
 		sb.WriteString(m.secondaryBitMap.ToHex())
 	}
 
-	for field := 1; field <= fieldCnt; field++ {
+	for field := 1; field < fieldCnt; field++ {
 		val, ok := m.fields[field]
 		if ok {
 			fieldSpec, ok := m.isoSpec.FieldDefMap[field+1]
