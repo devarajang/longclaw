@@ -31,44 +31,42 @@ func (s *StressTestDB) CreateStressTest(name string, testTimeSecs, requestsPerSe
 	}, nil
 }
 
+// The write functions below queue to the batch writer and return once queued; write errors are logged
+// by the writer. They are applied in call order, so a request's INSERT always lands before its UPDATE.
+
 // UpdateResponseTime records when the request was written to the socket and when its response was read.
 // Both times are captured by the caller so database delays are not counted as latency.
 func (s *StressTestDB) UpdateResponseTime(reference string, connectionID string, requestTime, responseTime time.Time) error {
 	timeTaken := responseTime.Sub(requestTime).Milliseconds()
-
-	result, err := s.db.Exec(
-		"UPDATE request_response_log SET request_time = ?, response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
-		requestTime, responseTime, timeTaken, reference, connectionID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update response log: %v", err)
-	}
-	if n, err := result.RowsAffected(); err == nil && n == 0 {
-		return fmt.Errorf("no request logged for reference %s on %s", reference, connectionID)
-	}
-	return nil
+	return s.writer.enqueue(writeOp{
+		query:     "UPDATE request_response_log SET request_time = ?, response_time = ?, time_taken = ? WHERE reference = ? AND connection_id = ?",
+		args:      []any{requestTime, responseTime, timeTaken, reference, connectionID},
+		noRowsErr: fmt.Sprintf("no request logged for reference %s on %s", reference, connectionID),
+	})
 }
 
 // Delete a request log entry for a message that was never sent
 func (s *StressTestDB) DeleteRequestLog(reference string, connectionID string) error {
-	_, err := s.db.Exec("DELETE FROM request_response_log WHERE reference = ? AND connection_id = ?", reference, connectionID)
-	return err
+	return s.writer.enqueue(writeOp{
+		query: "DELETE FROM request_response_log WHERE reference = ? AND connection_id = ?",
+		args:  []any{reference, connectionID},
+	})
 }
 
 // Add scheduled message to table
 func (s *StressTestDB) AddScheduledMessage(stressTestID int, createdAt time.Time, reference string, connectionID string, message string) error {
-	_, err := s.db.Exec("INSERT INTO scheduled_message(stresstest_id, created_at, reference, connection_id, message) VALUES (?,?,?,?,?)",
-		stressTestID, createdAt, reference, connectionID, message)
-	return err
+	return s.writer.enqueue(writeOp{
+		query: "INSERT INTO scheduled_message(stresstest_id, created_at, reference, connection_id, message) VALUES (?,?,?,?,?)",
+		args:  []any{stressTestID, createdAt, reference, connectionID, message},
+	})
 }
 
 // Add a request-response log entry
 func (s *StressTestDB) AddRequestLog(stressTestID int, requestTime time.Time, reference string, connectionID string) error {
-	_, err := s.db.Exec(
-		"INSERT INTO request_response_log (stresstest_id, request_time, reference,connection_id) VALUES (?, ?, ?, ?)",
-		stressTestID, requestTime, reference, connectionID)
-	//fmt.Println(err.Error())
-	return err
+	return s.writer.enqueue(writeOp{
+		query: "INSERT INTO request_response_log (stresstest_id, request_time, reference,connection_id) VALUES (?, ?, ?, ?)",
+		args:  []any{stressTestID, requestTime, reference, connectionID},
+	})
 }
 
 // Get stress test by ID
