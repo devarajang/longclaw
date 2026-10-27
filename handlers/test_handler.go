@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/devarajang/longclaw/internal/domain"
 )
@@ -38,4 +41,25 @@ func (h *Handlers) CreateTest(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Created stress test: %+v\n", stressTest)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stressTest)
+}
+
+// GetTestResults returns the summary for one stress test; it can be polled while the test runs
+func (h *Handlers) GetTestResults(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "stress test id must be a number")
+		return
+	}
+	results, err := h.App.DB.GetStressTestResults(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "no stress test with id "+strconv.Itoa(id))
+		return
+	}
+	if err != nil {
+		log.Println("Failed to read stress test results:", err)
+		writeError(w, http.StatusInternalServerError, "db_error", "failed to read stress test results")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }

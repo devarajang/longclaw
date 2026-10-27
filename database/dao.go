@@ -1,7 +1,9 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devarajang/longclaw/internal/domain"
@@ -83,10 +85,10 @@ func (s *StressTestDB) GetStressTest(id int) (*domain.StressTest, error) {
 	return &test, nil
 }
 
-// Get request logs for a stress test
+// Get request logs for a stress test. Unanswered requests have a zero ResponseTime and TimeTaken.
 func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]domain.RequestLog, error) {
 	rows, err := s.db.Query(
-		"SELECT id, request_time, response_time, time_taken, created_at, stresstest_id, reference FROM request_response_log WHERE stresstest_id = ?",
+		"SELECT id, request_time, response_time, time_taken, created_at, stresstest_id, reference, connection_id FROM request_response_log WHERE stresstest_id = ?",
 		stressTestID,
 	)
 	if err != nil {
@@ -97,11 +99,90 @@ func (s *StressTestDB) GetRequestLogs(stressTestID int) ([]domain.RequestLog, er
 	var logs []domain.RequestLog
 	for rows.Next() {
 		var log domain.RequestLog
-		err := rows.Scan(&log.ID, &log.RequestTime, &log.ResponseTime, &log.TimeTaken, &log.CreatedAt, &log.StressTestID, &log.Reference)
+		// response_time and time_taken stay NULL until a response arrives
+		var responseTime sql.NullTime
+		var timeTaken sql.NullInt64
+		err := rows.Scan(&log.ID, &log.RequestTime, &responseTime, &timeTaken, &log.CreatedAt, &log.StressTestID, &log.Reference, &log.ConnectionID)
 		if err != nil {
 			return nil, err
 		}
+		log.ResponseTime = responseTime.Time
+		log.TimeTaken = int(timeTaken.Int64)
 		logs = append(logs, log)
 	}
-	return logs, nil
+	return logs, rows.Err()
+}
+
+// SetTotalRequests records how many requests a finished stress test sent
+func (s *StressTestDB) SetTotalRequests(stressTestID int, total int) error {
+	return s.writer.enqueue(writeOp{
+		query: "UPDATE stress_test SET total_requests = ? WHERE id = ?",
+		args:  []any{total, stressTestID},
+	})
+}
+
+// GetStressTestResults summarises a stress test's request log: counts, achieved rate and latency
+// percentiles. It returns sql.ErrNoRows if the test does not exist.
+func (s *StressTestDB) GetStressTestResults(stressTestID int) (*domain.StressTestResults, error) {
+	test, err := s.GetStressTest(stressTestID)
+	if err != nil {
+		return nil, err
+	}
+	results := &domain.StressTestResults{StressTest: *test}
+
+	var minMs, avgMs, maxMs sql.NullFloat64
+	err = s.db.QueryRow(
+		"SELECT count(*), count(time_taken), min(time_taken), avg(time_taken), max(time_taken) FROM request_response_log WHERE stresstest_id = ?",
+		stressTestID,
+	).Scan(&results.Logged, &results.Answered, &minMs, &avgMs, &maxMs)
+	if err != nil {
+		return nil, err
+	}
+	results.Unanswered = results.Logged - results.Answered
+	if test.TestTimeSecs > 0 {
+		// Divide by how long the test has actually run, so the rate is also right while it is still running
+		secs := float64(test.TestTimeSecs)
+		if running := time.Since(test.CreatedAt).Seconds(); running < secs {
+			secs = math.Max(running, 1)
+		}
+		results.AchievedPerSecond = float64(results.Logged) / secs
+	}
+	results.LatencyMs.Min, results.LatencyMs.Avg, results.LatencyMs.Max = minMs.Float64, avgMs.Float64, maxMs.Float64
+
+	// Percentiles from one sorted read rather than one sort per percentile
+	rows, err := s.db.Query(
+		"SELECT time_taken FROM request_response_log WHERE stresstest_id = ? AND time_taken IS NOT NULL ORDER BY time_taken",
+		stressTestID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	latencies := make([]int64, 0, results.Answered)
+	for rows.Next() {
+		var ms int64
+		if err := rows.Scan(&ms); err != nil {
+			return nil, err
+		}
+		latencies = append(latencies, ms)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	results.LatencyMs.P50 = percentile(latencies, 0.50)
+	results.LatencyMs.P95 = percentile(latencies, 0.95)
+	results.LatencyMs.P99 = percentile(latencies, 0.99)
+	return results, nil
+}
+
+// percentile returns the nearest-rank percentile p (0-1] of sorted values, or 0 if there are none
+func percentile(sorted []int64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	rank := int(math.Ceil(p * float64(len(sorted))))
+	if rank < 1 {
+		rank = 1
+	}
+	return float64(sorted[rank-1])
 }
