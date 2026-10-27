@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/devarajang/longclaw/database"
 	"github.com/devarajang/longclaw/handlers"
@@ -16,9 +17,20 @@ import (
 
 func main() {
 
-	basePath := "/Users/deva/workspace/goworkspace/longclaw/"
+	// Base path holds the data/ and certs/ directories; defaults to the working directory
+	basePath := os.Getenv("LONGCLAW_BASE_PATH")
+	if basePath == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			log.Fatal("Failed to get working directory:", err)
+		}
+		basePath = wd
+	}
 
 	cfg, err := config.Load(basePath)
+	if err != nil {
+		log.Fatal("Failed to load config:", err)
+	}
 
 	// Initialize database
 	db, err := database.NewStressTestDB(cfg.Database.Path)
@@ -36,11 +48,10 @@ func main() {
 	}
 
 	isoSpec, err := iso.LoadSpecsFromFile(cfg.Data.SpecPath)
-	utils.GlobalIsoSpec = isoSpec
-
 	if err != nil {
-		panic(err.Error())
+		log.Fatal("Failed to load ISO spec:", err)
 	}
+	utils.GlobalIsoSpec = isoSpec
 
 	/*
 		isoMessage, err := iso.NewIso8583Message("0420F23E44010EE180720000004001020012164242424242424242000000000000000145031819031648370712030003182602031855410011010000012035077154837077100830063887901000000000638879KWIK PIK MARKET        UKIAH        CAUS015KWIK PIK MARKET840011100000080150170600095482    8400048028022B2IN0120ILKINT120     020048370703181203000000000000000000000000001Z042VD0370000E0810040000000     08210000115077038PR29V0010013025077685145605054230PI0110784483707315790     507715483707 465077685968904      09010005               343", isoSpec)
@@ -62,10 +73,14 @@ func main() {
 	*/
 	log.Println("Starting New ISO Server")
 	isoServer, err := network.NewIsoServer(db, cfg)
-	if err == nil {
-		panic("Unable to create server")
+	if err != nil {
+		log.Fatal("Unable to create server:", err)
 	}
-	go isoServer.StartListen()
+	go func() {
+		if err := isoServer.StartListen(); err != nil {
+			log.Fatal("ISO server stopped:", err)
+		}
+	}()
 
 	str := &runner.StressTestRunner{
 		StressChannel: make(chan domain.StressTest),

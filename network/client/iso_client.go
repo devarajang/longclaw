@@ -14,8 +14,9 @@ import (
 
 func main() {
 
-	certPath := "/Users/deva/workspace/goworkspace/longclaw/certs/"
-	fmt.Println("Running a TLS client", certPath)
+	certPath := getEnv("LONGCLAW_CERT_PATH", "certs/")
+	serverAddr := getEnv("LONGCLAW_ISO_ADDR", "127.0.0.1:8443")
+	fmt.Println("Running a TLS client", certPath, serverAddr)
 
 	caBytes, err := os.ReadFile(certPath + "server/ca.crt")
 
@@ -40,7 +41,7 @@ func main() {
 		MinVersion:   tls.VersionTLS12,
 	}
 
-	conn, err := tls.Dial("tcp", "127.0.0.1:8443", tlsConfig)
+	conn, err := tls.Dial("tcp", serverAddr, tlsConfig)
 	if err != nil {
 		log.Fatalf("connect err: %v", err)
 	}
@@ -85,4 +86,11 @@ func readLengthPrefixedMessage(conn net.Conn) ([]byte, error) {
 	}
 
 	return message, nil
+}
+
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
 }
